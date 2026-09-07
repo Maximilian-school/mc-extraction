@@ -1,0 +1,60 @@
+{
+  "segments": [
+    {
+      "id": "straight",
+      "file": "straight.nbt",
+      "weight": 5.0,
+      "maxConsecutiveStraight": 3,
+      "minSpacing": 0
+    },
+    {
+      "id": "corner",
+      "file": "corner.nbt",
+      "weight": 4.0,
+      "maxConsecutiveStraight": 1,
+      "minSpacing": 2
+    },
+    {
+      "id": "crossroads",
+      "file": "crossroads.nbt",
+      "weight": 3.5,
+      "maxConsecutiveStraight": 2,
+      "minSpacing": 4
+    },
+    {
+      "id": "deadend",
+      "file": [
+        {
+          "file": "deadend.nbt"
+        },
+        {
+          "file": "deadend_2.nbt"
+        }
+      ],
+      "weight": 2.0,
+      "minSpacing": 2
+    },
+    {
+      "id": "tjunction",
+      "file": "tjunction.nbt",
+      "weight": 3.5,
+      "maxConsecutiveStraight": 6,
+      "minSpacing": 2
+    },
+    {
+      "id": "stairwell",
+      "file": "stairwell.nbt",
+      "weight": 4.5,
+      "maxConsecutiveStraight": 1,
+      "minSpacing": 6
+    },
+    {
+      "id": "coal_room",
+      "file": "coal_room.nbt",
+      "weight": 2.0,
+      "maxConsecutiveStraight": 1,
+      "multi_tile": { "width": 3, "height": 3 },
+      "minSpacing": 20
+    }
+  ]
+}

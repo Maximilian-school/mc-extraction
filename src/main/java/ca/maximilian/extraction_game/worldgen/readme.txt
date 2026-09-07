@@ -1,0 +1,1 @@
+AI wrote 60% ish of the WFC implementation. 100% of the builds are mine! and the rest of the game logic is also mine!
