@@ -35,7 +35,7 @@ public class BlockHandlers {
 
     public static void breakBlockPostCart(PlayerBlockBreakEvent event) {
         if (!(event.getBlock().handler() instanceof OreBlockHandler) && event.getBlock() != Block.COBWEB) {
-            event.setCancelled(true);
+//            event.setCancelled(true);
         }
     }
 
@@ -48,7 +48,7 @@ public class BlockHandlers {
             itemEntity.setPickupDelay(Duration.ofMillis(500));
             itemEntity.setInstance(event.getInstance(), event.getBlockPosition().add(0.5, 0.5, 0.5));
 
-            event.setCancelled(true);
+//            event.setCancelled(true);
         }
     }
 }

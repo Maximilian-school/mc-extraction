@@ -1,6 +1,14 @@
 {
   "segments": [
     {
+      "id": "centre",
+      "file": "centre.nbt",
+      "weight": 5.0,
+      "maxConsecutiveStraight": 0,
+      "multi_tile": { "width": 3, "height": 3 },
+      "minSpacing": 5
+    },
+    {
       "id": "straight",
       "file": "straight.nbt",
       "weight": 5.0,

@@ -85,7 +85,7 @@ public class EventHandlers {
         if (event.getGameState().type().equals(GameStateType.STARTED)) {
             for (Player player : ExtractionGame.LOBBY_INSTANCE.getPlayers()) {
                 player.setInstance(ExtractionGame.MAIN_INSTANCE);
-                player.setGameMode(GameMode.SURVIVAL);
+                player.setGameMode(GameMode.SPECTATOR);
                 player.getInventory().addItemStack(ItemStack.of(Material.IRON_PICKAXE));
             }
         }
