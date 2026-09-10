@@ -1,5 +1,6 @@
 package ca.maximilian.extraction_game.core.handlers.block;
 
+import ca.maximilian.extraction_game.core.utils.ItemPrices;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
@@ -23,12 +24,14 @@ public class BlockHandlers {
     public static void registerBlockHandlers() {
         MinecraftServer.getBlockManager().registerHandler("minecraft:chest", ChestHandler::new);
         MinecraftServer.getBlockManager().registerHandler("minecraft:rail", RailHandler::new);
+        MinecraftServer.getBlockManager().registerHandler("minecraft:oak_button", ButtonHandler::new);
     }
 
     public static Block addHandler(Block block) {
         BlockManager blockManager = MinecraftServer.getBlockManager();
 
         if (block.name().contains("rail")) return block.withHandler(blockManager.getHandler("minecraft:rail"));
+        if (block.name().contains("button")) return block.withHandler(blockManager.getHandler("minecraft:oak_button"));
 
         return block;
     }
@@ -44,7 +47,7 @@ public class BlockHandlers {
         if (event.getBlock() == Block.COBWEB) {
             event.getInstance().breakBlock(event.getPlayer(), event.getBlockPosition(), event.getBlockFace());
 
-            ItemEntity itemEntity = new ItemEntity(ItemStack.of(Material.STRING));
+            ItemEntity itemEntity = new ItemEntity(ItemPrices.withPrices(ItemStack.of(Material.STRING)));
             itemEntity.setPickupDelay(Duration.ofMillis(500));
             itemEntity.setInstance(event.getInstance(), event.getBlockPosition().add(0.5, 0.5, 0.5));
 
