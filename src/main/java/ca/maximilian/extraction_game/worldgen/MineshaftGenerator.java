@@ -1,7 +1,6 @@
 package ca.maximilian.extraction_game.worldgen;
 
 import ca.maximilian.extraction_game.core.handlers.block.BlockHandlers;
-import ca.maximilian.extraction_game.core.handlers.block.RailHandler;
 import net.hollowcube.schem.util.Rotation;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
@@ -17,10 +16,10 @@ import java.util.concurrent.Executors;
 public class MineshaftGenerator {
 
     public static final String DEFAULT_CONFIG_PATH = "/extraction_game/config.json";
-    public static final int DEFAULT_SIZE_BLOCKS = 24*5; // Increased to fit 32x32 segments (32 * 5 = 160)
+    public static final int DEFAULT_SIZE_BLOCKS = 24*5;
     public static final int DEFAULT_FLOORS = 3;
     private static final ExecutorService GENERATION_WORKERS = Executors.newFixedThreadPool(
-            Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() - 1)),
+            Math.clamp(Runtime.getRuntime().availableProcessors() - 1, 1, 4),
             Thread.ofPlatform().daemon().name("mineshaft-worker-", 0).factory());
 
     public static void generate(Instance instance) {
@@ -55,7 +54,7 @@ public class MineshaftGenerator {
     }
 
     public static CompletableFuture<Void> generateAsync(Instance instance, Pos startPos, String configPath,
-                                                       int sizeBlocks, int floors, Random random) {
+                                                        int sizeBlocks, int floors, Random random) {
         if (sizeBlocks <= 0 || floors <= 0) {
             throw new IllegalArgumentException("Size and floor count must be positive");
         }
@@ -63,16 +62,17 @@ public class MineshaftGenerator {
                 sizeBlocks, true, floors, random), GENERATION_WORKERS);
     }
 
-private static void generateOnWorker(Instance instance, Pos startPos, String configPath,
-                                          int size, boolean sizeInBlocks, int floors, Random random) {
+    private static void generateOnWorker(Instance instance, Pos startPos, String configPath,
+                                         int size, boolean sizeInBlocks, int floors, Random random) {
         List<MineshaftSegment> segments = SegmentLoader.loadSegments(configPath);
         if (segments.isEmpty()) throw new IllegalStateException("No segments loaded from config!");
-        MineshaftSegment seed = SegmentLoader.getStartingSegment(segments);
-        int cellStep = seed.getWidth();
+        // No more dedicated starting segment, cell step is just the largest
+        // ordinary (non-stairwell) segment footprint.
+        int cellStep = 5;
         int gridSize = sizeInBlocks ? gridSizeForBlocks(size, cellStep) : size;
         boolean hasVertical = segments.stream().anyMatch(WaveFunctionCollapse::isStairwellSegment);
         WaveFunctionCollapse wfc = new WaveFunctionCollapse(hasVertical ? Math.max(2, floors) : floors,
-                gridSize, gridSize, cellStep, segments, seed, random);
+                gridSize, gridSize, cellStep, segments, random);
         wfc.generateIntoInstance(instance, startPos, Block.BEACON);
     }
 
@@ -97,8 +97,6 @@ private static void generateOnWorker(Instance instance, Pos startPos, String con
         var schematic = segment.getSchematic();
         schematic.forEachBlock(rotation, (offset, block) -> {
             if (markerBlock != null && block.compare(markerBlock)) {
-                // Marker blocks mark connectors and are never placed; carve air so the
-                // passage stays open even when the surrounding chunk is solid stone.
                 instance.setBlock(basePos.add(offset.x(), offset.y(), offset.z()), Block.AIR);
                 return;
             }

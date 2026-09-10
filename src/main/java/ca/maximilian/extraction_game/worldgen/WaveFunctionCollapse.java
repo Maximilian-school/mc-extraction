@@ -1,7 +1,6 @@
 package ca.maximilian.extraction_game.worldgen;
 
 import ca.maximilian.extraction_game.core.handlers.block.BlockHandlers;
-import ca.maximilian.extraction_game.core.handlers.block.RailHandler;
 import net.hollowcube.schem.Schematic;
 import net.hollowcube.schem.util.CoordinateUtil;
 import net.hollowcube.schem.util.Rotation;
@@ -10,7 +9,6 @@ import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.instance.Instance;
 import net.minestom.server.instance.block.Block;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
@@ -24,15 +22,14 @@ public class WaveFunctionCollapse {
     private final int cellStep;
     private final List<WfcTile> prototypes;
     private final List<MineshaftSegment> multiTileSegments;
-    private final WfcTile startingTile;
     private final Random random;
+    private final Map<String, int[]> appearanceLimits; // id -> {min, max}, -1 means unset
 
     public WaveFunctionCollapse(
             int width,
             int height,
             int cellStep,
             List<MineshaftSegment> availableSegments,
-            MineshaftSegment startingSegment,
             Random random
     ) {
         this(
@@ -41,7 +38,6 @@ public class WaveFunctionCollapse {
                 height,
                 cellStep,
                 availableSegments,
-                startingSegment,
                 random
         );
     }
@@ -52,7 +48,6 @@ public class WaveFunctionCollapse {
             int height,
             int cellStep,
             List<MineshaftSegment> availableSegments,
-            MineshaftSegment startingSegment,
             Random random
     ) {
         this.layers = Math.max(1, layers);
@@ -62,15 +57,21 @@ public class WaveFunctionCollapse {
         this.random = random != null ? random : new Random();
         this.prototypes = new ArrayList<>();
         this.multiTileSegments = new ArrayList<>();
+        this.appearanceLimits = new HashMap<>();
 
-        // Decompose multi-tile segments into Clusters and add them as atomic units
         for (MineshaftSegment segment : availableSegments) {
-            if (segment.isStarting()) continue;
+            if (segment.hasMinAppearances() || segment.hasMaxAppearances()) {
+                appearanceLimits.put(segment.getId(), new int[]{segment.getMinAppearances(), segment.getMaxAppearances()});
+            }
+            if (isCenterSegmentId(segment.getId())) {
+                // Force-placed once at the true grid center, see seedCenterCluster.
+                // Overrides whatever min/max was set in config since it can only ever appear once, right here.
+                appearanceLimits.put(segment.getId(), new int[]{1, 1});
+            }
 
             double weight = segment.getWeight() >= 0 ? segment.getWeight() : getSegmentDefaultWeight(segment.getId());
 
             if (segment.isMultiTile()) {
-                // Create a Cluster from this multi-tile segment
                 Cluster cluster = new Cluster(
                         segment.getId(),
                         segment.getSchematic(),
@@ -80,12 +81,11 @@ public class WaveFunctionCollapse {
                         segment.getMultiTileLayers(),
                         weight,
                         false,
-                        Rotation.NONE
+                        Rotation.NONE,
+                        segment.getMinAppearances(),
+                        segment.getMaxAppearances()
                 );
                 multiTileSegments.add(segment);
-                // Add cluster prototypes (anchor tiles) for all rotations.
-                // Filler tiles for the rest of the footprint are synthesized
-                // on demand at reservation time — see reserveCluster below.
                 for (Rotation rot : Rotation.values()) {
                     prototypes.add(WfcTile.fromCluster(cluster, rot, weight, cellStep));
                 }
@@ -105,15 +105,7 @@ public class WaveFunctionCollapse {
             }
         }
 
-        // Add empty tile (weight 2.0 for negative space and walls)
         this.prototypes.add(WfcTile.createEmptyTile(2.0));
-
-        // Create starting tile
-        if (startingSegment != null) {
-            this.startingTile = WfcTile.fromSegment(startingSegment, Rotation.NONE, 1.0);
-        } else {
-            this.startingTile = null;
-        }
     }
 
     private static boolean hasVerticalSegment(List<MineshaftSegment> segments) {
@@ -127,6 +119,13 @@ public class WaveFunctionCollapse {
             return true;
         }
         return segment.getHeight() > 5;
+    }
+
+    /** Matches the special always-centered hub segment, "centre" or "center", case insensitive. */
+    private static boolean isCenterSegmentId(String id) {
+        if (id == null) return false;
+        String lower = id.toLowerCase();
+        return lower.equals("centre") || lower.equals("center");
     }
 
     private double getSegmentDefaultWeight(String id) {
@@ -174,7 +173,6 @@ public class WaveFunctionCollapse {
         boolean requiresVertical = layers > 1 && prototypes.stream().anyMatch(WfcTile::isVerticalBottom);
         WfcTile[][][] fallback = null;
 
-        // Primary attempts with strict boundaries
         for (int attempt = 0; attempt < maxAttempts; attempt++) {
             WfcTile[][][] result = runWfc(worldStartPos, false);
             if (result != null) {
@@ -193,12 +191,12 @@ public class WaveFunctionCollapse {
                     }
                     if (fallback == null) fallback = result;
                 } else {
+                    pruneUnreachable(result);
                     return result;
                 }
             }
         }
 
-        // Secondary attempts with relaxed boundaries to ensure segments actually spawn
         for (int attempt = 0; attempt < maxAttempts; attempt++) {
             WfcTile[][][] result = runWfc(worldStartPos, true);
             if (result != null) {
@@ -233,23 +231,15 @@ public class WaveFunctionCollapse {
             }
         }
 
-        int startX = width / 2;
-        int startZ = height / 2;
-
         Queue<CellPos3D> queue = new ArrayDeque<>();
+        Map<String, Integer> appearanceCounts = new HashMap<>();
 
-        if (startingTile != null) {
-            grid[0][startX][startZ] = new ArrayList<>(List.of(startingTile));
-            queue.add(new CellPos3D(0, startX, startZ));
-
-            WfcTile empty = prototypes.stream().filter(WfcTile::isEmpty).findFirst().orElse(null);
-            if (empty != null) {
-                for (int l = 1; l < layers; l++) {
-                    grid[l][startX][startZ] = new ArrayList<>(List.of(empty));
-                    queue.add(new CellPos3D(l, startX, startZ));
-                }
-            }
-        }
+        // Force the centre/center cluster into the true grid center before anything
+        // else collapses. This is the anchor the rest of the map grows from, without
+        // it the very first cell has no committed neighbor, so chooseWeighted's
+        // "no incoming socket" branch coin-flips between empty and non-empty, which
+        // is exactly what was producing sparse isolated single tiles.
+        seedCenterCluster(grid, queue, appearanceCounts);
 
         for (int l = 0; l < layers; l++) {
             for (int x = 0; x < width; x++) {
@@ -297,11 +287,9 @@ public class WaveFunctionCollapse {
                 return null;
             }
 
-            // Filter out cluster anchor placements that don't actually fit
-            // right now (out of bounds, cells already committed, or socket
-            // mismatch with an already-decided neighbor).
             List<WfcTile> feasible = new ArrayList<>(domain.size());
             for (WfcTile t : domain) {
+                if (isAtMaxAppearances(t, appearanceCounts)) continue;
                 if (t.isFootprintAnchor()) {
                     Cluster cluster = t.cluster();
                     int fw = cluster.getFootprintWidth(t.rotation());
@@ -318,7 +306,7 @@ public class WaveFunctionCollapse {
                 return null;
             }
 
-            WfcTile chosen = chooseWeighted(feasible, nextCell, grid);
+            WfcTile chosen = chooseWeighted(feasible, nextCell, grid, appearanceCounts);
 
             if (chosen.isFootprintAnchor()) {
                 Cluster cluster = chosen.cluster();
@@ -328,9 +316,11 @@ public class WaveFunctionCollapse {
                 int flayers = cluster.getFootprintLayers();
                 Map<Cluster.FootprintCell, Set<Direction>> sockets = cluster.getFootprintSockets(rot, cellStep);
                 reserveCluster(grid, queue, cluster, rot, chosen, nextCell.x(), nextCell.z(), nextCell.l(), sockets, fw, fh, flayers);
+                recordAppearance(chosen, appearanceCounts);
             } else {
                 grid[nextCell.l()][nextCell.x()][nextCell.z()] = new ArrayList<>(List.of(chosen));
                 queue.add(nextCell);
+                recordAppearance(chosen, appearanceCounts);
             }
 
             if (!propagate(grid, queue)) {
@@ -350,11 +340,42 @@ public class WaveFunctionCollapse {
     }
 
     /**
-     * Checks whether an fw x fh x flayers cluster footprint can be placed with
-     * its anchor at (x, z, l): in bounds, no cell already collapsed to
-     * something else, and no socket on the footprint's outer edge conflicting
-     * with an already-decided neighbor cell.
+     * Finds the prototype anchor tile for the segment whose id is "centre" or
+     * "center" and forcibly reserves its footprint dead center in the grid,
+     * using the same reservation path a normal cluster placement would use.
+     * Returns false (no-op) if no such segment exists in the loaded config,
+     * so this is entirely opt in.
      */
+    private boolean seedCenterCluster(List<WfcTile>[][][] grid, Queue<CellPos3D> queue, Map<String, Integer> appearanceCounts) {
+        WfcTile anchor = prototypes.stream()
+                .filter(t -> t.isFootprintAnchor() && t.cluster() != null
+                        && isCenterSegmentId(t.cluster().getId()) && t.rotation() == Rotation.NONE)
+                .findFirst()
+                .orElse(null);
+        if (anchor == null) return false;
+
+        Cluster cluster = anchor.cluster();
+        Rotation rot = anchor.rotation();
+        int fw = cluster.getFootprintWidth(rot);
+        int fh = cluster.getFootprintHeight(rot);
+        int flayers = cluster.getFootprintLayers();
+
+        if (fw > width || fh > height || flayers > layers) {
+            System.err.println("[WFC] centre segment footprint (" + fw + "x" + fh + "x" + flayers
+                    + ") does not fit the " + width + "x" + height + "x" + layers + " grid, skipping forced placement");
+            return false;
+        }
+
+        int anchorX = width / 2 - fw / 2;
+        int anchorZ = height / 2 - fh / 2;
+        int anchorL = 0;
+
+        Map<Cluster.FootprintCell, Set<Direction>> sockets = cluster.getFootprintSockets(rot, cellStep);
+        reserveCluster(grid, queue, cluster, rot, anchor, anchorX, anchorZ, anchorL, sockets, fw, fh, flayers);
+        recordAppearance(anchor, appearanceCounts);
+        return true;
+    }
+
     private boolean canPlaceCluster(List<WfcTile>[][][] grid, int x, int z, int l, int fw, int fh, int flayers,
                                     Map<Cluster.FootprintCell, Set<Direction>> sockets) {
         if (x + fw > width || z + fh > height || l + flayers > layers) return false;
@@ -365,23 +386,23 @@ public class WaveFunctionCollapse {
                     int gx = x + i, gz = z + j, gl = l + k;
                     List<WfcTile> cellDomain = grid[gl][gx][gz];
                     if (!isAnchor && cellDomain.size() == 1) {
-                        return false; // already committed to something else
+                        return false;
                     }
                     Set<Direction> fillerSockets = sockets.getOrDefault(new Cluster.FootprintCell(i, j), EnumSet.noneOf(Direction.class));
                     for (Direction dir : Direction.values()) {
                         int ni = i + getDirX(dir), nj = j + getDirZ(dir);
-                        if (ni >= 0 && ni < fw && nj >= 0 && nj < fh) continue; // internal edge, always fine
+                        if (ni >= 0 && ni < fw && nj >= 0 && nj < fh) continue;
 
                         int outX = gx + getDirX(dir), outZ = gz + getDirZ(dir);
                         boolean open = fillerSockets.contains(dir);
                         if (outX < 0 || outX >= width || outZ < 0 || outZ >= height) {
-                            if (open) return false; // socket would face off the map
+                            if (open) return false;
                             continue;
                         }
                         List<WfcTile> outsideDomain = grid[gl][outX][outZ];
                         if (outsideDomain.size() == 1) {
                             boolean outsideOpen = outsideDomain.get(0).isOpen(dir.opposite());
-                            if (outsideOpen != open) return false; // mismatched with a decided neighbor
+                            if (outsideOpen != open) return false;
                         }
                     }
                 }
@@ -390,11 +411,6 @@ public class WaveFunctionCollapse {
         return true;
     }
 
-    /**
-     * Commits an fw x fh x flayers cluster footprint: the anchor cell gets the
-     * already-chosen anchor tile, every other cell gets a synthesized filler
-     * tile exposing only the sockets that physically belong to that cell.
-     */
     private void reserveCluster(List<WfcTile>[][][] grid, Queue<CellPos3D> queue, Cluster cluster, Rotation rot,
                                 WfcTile anchorTile, int x, int z, int l,
                                 Map<Cluster.FootprintCell, Set<Direction>> sockets, int fw, int fh, int flayers) {
@@ -412,65 +428,6 @@ public class WaveFunctionCollapse {
                 }
             }
         }
-    }
-
-    private boolean constrainMainRoutes(List<WfcTile>[][][] grid, Queue<CellPos3D> queue) {
-        int radiusX = width / 2 - 2;
-        int radiusZ = height / 2 - 2;
-        if (startingTile == null || startingTile.openSockets().size() != 4
-                || Math.min(radiusX, radiusZ) * (long) cellStep < 64) return true;
-
-        int centerX = width / 2;
-        int centerZ = height / 2;
-        int minX = centerX - radiusX;
-        int maxX = centerX + radiusX;
-        int minZ = centerZ - radiusZ;
-        int maxZ = centerZ + radiusZ;
-
-        for (int l = 0; l < layers; l++) {
-            int[] rows = l == 0 ? new int[]{minZ, centerZ, maxZ} : new int[]{minZ, maxZ};
-            int[] columns = l == 0 ? new int[]{minX, centerX, maxX} : new int[]{minX, maxX};
-            for (int z : rows) {
-                for (int x = minX; x < maxX; x++) {
-                    if (!requireConnection(grid, queue, l, x, z, Direction.EAST)) return false;
-                }
-            }
-            for (int x : columns) {
-                for (int z = minZ; z < maxZ; z++) {
-                    if (!requireConnection(grid, queue, l, x, z, Direction.SOUTH)) return false;
-                }
-            }
-        }
-
-        List<WfcTile> stairs = prototypes.stream().filter(WfcTile::isVerticalBottom).toList();
-        if (layers > 1 && stairs.isEmpty()) return false;
-        for (int l = 0; l < layers - 1; l++) {
-            int offset = l % 2 == 0 ? 2 : -2;
-            int x = centerX + offset;
-            int z = centerZ + offset;
-            WfcTile bottom = stairs.get(random.nextInt(stairs.size()));
-            WfcTile top = prototypes.stream().filter(tile -> tile.isVerticalTop()
-                            && tile.segment() == bottom.segment() && tile.rotation() == bottom.rotation())
-                    .findFirst().orElseThrow();
-            if (!grid[l][x][z].contains(bottom) || !grid[l + 1][x][z].contains(top)) return false;
-            grid[l][x][z] = new ArrayList<>(List.of(bottom));
-            grid[l + 1][x][z] = new ArrayList<>(List.of(top));
-            queue.add(new CellPos3D(l, x, z));
-            queue.add(new CellPos3D(l + 1, x, z));
-            for (int floor = l; floor <= l + 1; floor++) {
-                WfcTile tile = floor == l ? bottom : top;
-                for (Direction direction : tile.openSockets()) {
-                    int cx = x;
-                    int cz = z;
-                    while (cx > minX && cx < maxX && cz > minZ && cz < maxZ) {
-                        if (!requireConnection(grid, queue, floor, cx, cz, direction)) return false;
-                        cx += getDirX(direction);
-                        cz += getDirZ(direction);
-                    }
-                }
-            }
-        }
-        return true;
     }
 
     private boolean requireConnection(List<WfcTile>[][][] grid, Queue<CellPos3D> queue,
@@ -661,7 +618,64 @@ public class WaveFunctionCollapse {
         return minDistance == Integer.MAX_VALUE ? Integer.MAX_VALUE : minDistance;
     }
 
-    private WfcTile chooseWeighted(List<WfcTile> domain, CellPos3D cell, List<WfcTile>[][][] grid) {
+    private int deadEndRepulsionRadius() {
+        return Math.max(1, MIN_DEAD_END_DISTANCE / cellStep);
+    }
+
+    private static boolean isDeadEndTile(WfcTile tile) {
+        if (tile == null || tile.isEmpty()) return false;
+        if (tile.isVerticalBottom() || tile.isVerticalTop()) return false;
+        if (tile.isMultiTilePart()) return false;
+        return tile.openSockets().size() == 1;
+    }
+
+    private boolean hasNearbyDeadEnd(List<WfcTile>[][][] grid, CellPos3D cell, int radius) {
+        int l = cell.l(), cx = cell.x(), cz = cell.z();
+        int minX = Math.max(0, cx - radius), maxX = Math.min(width - 1, cx + radius);
+        int minZ = Math.max(0, cz - radius), maxZ = Math.min(height - 1, cz + radius);
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                if (x == cx && z == cz) continue;
+                List<WfcTile> domain = grid[l][x][z];
+                if (domain.size() == 1 && isDeadEndTile(domain.get(0))) {
+                    if (Math.abs(x - cx) + Math.abs(z - cz) <= radius) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private String appearanceKey(WfcTile tile) {
+        if (tile == null) return null;
+        if (tile.isMultiTilePart()) return tile.cluster() != null ? tile.cluster().getId() : null;
+        return tile.segment() != null ? tile.segment().getId() : null;
+    }
+
+    private boolean isAtMaxAppearances(WfcTile tile, Map<String, Integer> counts) {
+        String key = appearanceKey(tile);
+        if (key == null) return false;
+        int[] limits = appearanceLimits.get(key);
+        if (limits == null || limits[1] <= 0) return false;
+        return counts.getOrDefault(key, 0) >= limits[1];
+    }
+
+    private void recordAppearance(WfcTile tile, Map<String, Integer> counts) {
+        String key = appearanceKey(tile);
+        if (key == null) return;
+        if (!appearanceLimits.containsKey(key)) return;
+        counts.merge(key, 1, Integer::sum);
+    }
+
+    private double underMinAppearancesBoost(WfcTile tile, Map<String, Integer> appearanceCounts) {
+        String key = appearanceKey(tile);
+        if (key == null) return 1.0;
+        int[] limits = appearanceLimits.get(key);
+        if (limits == null || limits[0] <= 0) return 1.0;
+        int soFar = appearanceCounts.getOrDefault(key, 0);
+        return soFar < limits[0] ? 6.0 : 1.0;
+    }
+
+    private WfcTile chooseWeighted(List<WfcTile> domain, CellPos3D cell, List<WfcTile>[][][] grid, Map<String, Integer> appearanceCounts) {
         boolean hasIncomingOpenSocket = hasAdjacentOpenSocket(grid, cell.l(), cell.x(), cell.z());
 
         List<WfcTile> candidateDomain = domain;
@@ -671,13 +685,11 @@ public class WaveFunctionCollapse {
                 candidateDomain = nonEmpty;
             }
         } else {
-            // To achieve ~70% fill rate, we only choose an empty tile with 30% probability
-            // if there are non-empty alternatives.
             List<WfcTile> emptyList = domain.stream().filter(WfcTile::isEmpty).toList();
             List<WfcTile> nonEmptyList = domain.stream().filter(t -> !t.isEmpty()).toList();
 
             if (!emptyList.isEmpty() && !nonEmptyList.isEmpty()) {
-                if (random.nextDouble() < 0.8) {
+                if (random.nextDouble() < 0.5) {
                     return emptyList.get(0);
                 }
                 candidateDomain = nonEmptyList;
@@ -695,7 +707,6 @@ public class WaveFunctionCollapse {
         double totalWeight = 0.0;
         for (WfcTile tile : candidateDomain) {
             double w = Math.max(0.01, tile.weight());
-            // Multi-tile parts are placed atomically, so no straight-sequence penalties apply
             if (!tile.isMultiTilePart()) {
                 if (tile.isVerticalBottom() && boostStairs) {
                     w *= 4.0;
@@ -718,6 +729,8 @@ public class WaveFunctionCollapse {
                     if (dist < spacing) w *= 0.01;
                 }
             }
+
+            w *= underMinAppearancesBoost(tile, appearanceCounts);
 
             totalWeight += w;
         }
@@ -725,7 +738,6 @@ public class WaveFunctionCollapse {
         double count = 0.0;
         for (WfcTile tile : candidateDomain) {
             double w = Math.max(0.01, tile.weight());
-            // Multi-tile parts are placed atomically, so no straight-sequence penalties apply
             if (!tile.isMultiTilePart()) {
                 if (tile.isVerticalBottom() && boostStairs) {
                     w *= 4.0;
@@ -748,6 +760,8 @@ public class WaveFunctionCollapse {
                     if (dist < spacing) w *= 0.01;
                 }
             }
+
+            w *= underMinAppearancesBoost(tile, appearanceCounts);
 
             count += w;
             if (count >= r) {
@@ -775,7 +789,6 @@ public class WaveFunctionCollapse {
 
     private static boolean isStraightTile(WfcTile tile) {
         if (tile == null || tile.isEmpty() || tile.segment() == null) return false;
-        // Multi-tile parts are atomic clusters, not straight corridors
         if (tile.isMultiTilePart()) return false;
         if (tile.isVerticalBottom() || tile.isVerticalTop()) return false;
         var sockets = tile.openSockets();
@@ -804,119 +817,15 @@ public class WaveFunctionCollapse {
         return count;
     }
 
-    public void generateIntoInstance(Instance instance, Point worldStartPos, Block defaultMarkerBlock) {
-        WfcTile[][][] solution = solve3D(50, worldStartPos);
-
-        int centerX = width / 2;
-        int centerZ = height / 2;
-        int layerStepY = 5; // 5-tall segments: floor at y=0..4, next floor at y=5..9
-
-        for (int l = 0; l < layers; l++) {
-            for (int x = 0; x < width; x++) {
-                for (int z = 0; z < height; z++) {
-                    WfcTile tile = solution[l][x][z];
-                    if (tile == null || tile.isEmpty()) continue;
-
-                    // Handle vertical tiles (stairs)
-                    if (tile.isVerticalTop()) continue;
-
-                    int relX = x - centerX;
-                    int relZ = z - centerZ;
-                    int worldCenterX = worldStartPos.blockX() + relX * cellStep;
-                    int worldCenterZ = worldStartPos.blockZ() + relZ * cellStep;
-                    int worldCenterY = worldStartPos.blockY() + l * layerStepY;
-
-                    if (tile.isMultiTilePart()) {
-                        // Filler cells (any footprint offset other than 0,0,0)
-                        // don't paint anything — only the anchor does, once,
-                        // centered across the entire reserved footprint.
-                        if (!tile.isFootprintAnchor()) continue;
-
-                        Cluster cluster = tile.cluster();
-                        Rotation rot = tile.rotation();
-                        int fw = cluster.getFootprintWidth(rot);
-                        int fh = cluster.getFootprintHeight(rot);
-
-                        int[] bounds = cluster.getRotatedBounds(rot);
-                        int minRelX = bounds[0], maxRelX = bounds[1];
-                        int minRelZ = bounds[2], maxRelZ = bounds[3];
-                        int rotWidth = maxRelX - minRelX + 1;
-                        int rotLength = maxRelZ - minRelZ + 1;
-
-                        // Center the schematic across the FULL reserved footprint
-                        // (fw x fh grid cells starting at the anchor), not just
-                        // the single anchor cell — this is the fix for rooms
-                        // landing in the wrong spot.
-                        int footprintCenterX = worldCenterX + (fw - 1) * cellStep / 2;
-                        int footprintCenterZ = worldCenterZ + (fh - 1) * cellStep / 2;
-
-                        int baseX = footprintCenterX - rotWidth / 2 - minRelX;
-                        int baseZ = footprintCenterZ - rotLength / 2 - minRelZ;
-                        int baseY = worldCenterY;
-
-                        pasteCluster(instance, cluster, rot, new Vec(baseX, baseY, baseZ), defaultMarkerBlock);
-                    } else if (tile.segment() != null) {
-                        // Regular single-cell segment
-                        MineshaftSegment segment = tile.segment();
-                        Rotation rot = tile.rotation();
-
-                        // Calculate base position for the segment's bounding box origin
-                        Point c1 = CoordinateUtil.rotatePos(new Vec(0, 0, 0), rot);
-                        Point c2 = CoordinateUtil.rotatePos(new Vec(segment.getWidth() - 1, 0, 0), rot);
-                        Point c3 = CoordinateUtil.rotatePos(new Vec(0, 0, segment.getLength() - 1), rot);
-                        Point c4 = CoordinateUtil.rotatePos(new Vec(segment.getWidth() - 1, 0, segment.getLength() - 1), rot);
-
-                        int minRelX = (int) Math.min(Math.min(c1.x(), c2.x()), Math.min(c3.x(), c4.x()));
-                        int maxRelX = (int) Math.max(Math.max(c1.x(), c2.x()), Math.max(c3.x(), c4.x()));
-                        int minRelZ = (int) Math.min(Math.min(c1.z(), c2.z()), Math.min(c3.z(), c4.z()));
-                        int maxRelZ = (int) Math.max(Math.max(c1.z(), c2.z()), Math.max(c3.z(), c4.z()));
-
-                        int rotWidth = maxRelX - minRelX + 1;
-                        int rotLength = maxRelZ - minRelZ + 1;
-
-                        int baseX = worldCenterX - rotWidth / 2 - minRelX;
-                        int baseY = worldCenterY;
-                        int baseZ = worldCenterZ - rotLength / 2 - minRelZ;
-
-                        MineshaftGenerator.pasteSegment(instance, segment, new Vec(baseX, baseY, baseZ), rot,
-                                segment.getMarkerBlock() != null ? segment.getMarkerBlock() : defaultMarkerBlock);
-                    }
-                }
-            }
-        }
-    }
-
     /**
-     * Pastes a cluster's full schematic at basePos, which MUST be the min-corner
-     * (post-rotation) of the cluster's bounding box, centered across its whole
-     * reserved footprint — see generateIntoInstance. Do NOT pass a raw connector
-     * position here.
-     */
-    private void pasteCluster(Instance instance, Cluster cluster, Rotation rotation, Point basePos, Block markerBlock) {
-        if (cluster == null || cluster.getSchematic() == null) return;
-        Schematic schematic = cluster.getSchematic();
-        schematic.forEachBlock(rotation, (offset, block) -> {
-            if (markerBlock != null && block.compare(markerBlock)) {
-                // Marker blocks mark connectors and are never placed; carve air so the
-                // passage stays open even when the surrounding chunk is solid stone.
-                instance.setBlock(basePos.add(offset.x(), offset.y(), offset.z()), Block.AIR);
-                return;
-            }
-
-            instance.setBlock(basePos.add(offset.x(), offset.y(), offset.z()), BlockHandlers.addHandler(block));
-        });
-    }
-
-    /**
-     * Flood fills outward from the starting tile using the same open socket
-     * rules the WFC solver itself uses, then nukes anything the flood never
-     * touched. Multi tile clusters are treated as one indivisible blob: if
-     * any single cell of a cluster gets reached, the whole footprint survives,
-     * and if none of it gets reached, the whole footprint gets vaporized.
+     * Flood fills outward from the true grid center (where the centre/center
+     * cluster is now guaranteed to sit) using the same open socket rules the
+     * WFC solver itself uses, then nukes anything the flood never touched.
+     * Multi tile clusters are treated as one indivisible blob: if any single
+     * cell of a cluster gets reached, the whole footprint survives, and if
+     * none of it gets reached, the whole footprint gets vaporized.
      */
     private void pruneUnreachable(WfcTile[][][] grid) {
-        if (startingTile == null) return; // nothing to path from, nothing to prune
-
         int startX = width / 2;
         int startZ = height / 2;
         int startL = 0;
@@ -977,16 +886,10 @@ public class WaveFunctionCollapse {
             }
         }
         if (removed > 0) {
-            LoggerFactory.getLogger(WfcTile.class).info("Removed " + removed + " unreachable cell(s)");
+            System.out.println("[WFC] pruned " + removed + " unreachable cell(s), they were living a lie");
         }
     }
 
-    /**
-     * Marks a single cell reachable and enqueues it. If the cell belongs to a
-     * multi tile cluster, also marks and enqueues every other cell of that same
-     * placement's footprint (reconstructed from the anchor via the stored offsets),
-     * so the whole room gets judged as one unit instead of getting chopped in half.
-     */
     private void markReachable(WfcTile[][][] grid, boolean[][][] visited, Deque<CellPos3D> queue, int l, int x, int z) {
         if (visited[l][x][z]) return;
         WfcTile tile = grid[l][x][z];
@@ -1018,34 +921,88 @@ public class WaveFunctionCollapse {
         }
     }
 
-    /** Converts the block-distance constant into a grid-cell radius using cellStep. */
-    private int deadEndRepulsionRadius() {
-        return Math.max(1, MIN_DEAD_END_DISTANCE / cellStep);
-    }
+    public void generateIntoInstance(Instance instance, Point worldStartPos, Block defaultMarkerBlock) {
+        WfcTile[][][] solution = solve3D(50, worldStartPos);
 
-    /** Structurally a dead end: a real, non-vertical, non-cluster tile with exactly one open socket. */
-    private static boolean isDeadEndTile(WfcTile tile) {
-        if (tile == null || tile.isEmpty()) return false;
-        if (tile.isVerticalBottom() || tile.isVerticalTop()) return false;
-        if (tile.isMultiTilePart()) return false;
-        return tile.openSockets().size() == 1;
-    }
+        int centerX = width / 2;
+        int centerZ = height / 2;
+        int layerStepY = 5;
 
-    /** Scans a manhattan radius around a cell for any already-committed dead end tile. */
-    private boolean hasNearbyDeadEnd(List<WfcTile>[][][] grid, CellPos3D cell, int radius) {
-        int l = cell.l(), cx = cell.x(), cz = cell.z();
-        int minX = Math.max(0, cx - radius), maxX = Math.min(width - 1, cx + radius);
-        int minZ = Math.max(0, cz - radius), maxZ = Math.min(height - 1, cz + radius);
-        for (int x = minX; x <= maxX; x++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                if (x == cx && z == cz) continue;
-                List<WfcTile> domain = grid[l][x][z];
-                if (domain.size() == 1 && isDeadEndTile(domain.get(0))) {
-                    if (Math.abs(x - cx) + Math.abs(z - cz) <= radius) return true;
+        for (int l = 0; l < layers; l++) {
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < height; z++) {
+                    WfcTile tile = solution[l][x][z];
+                    if (tile == null || tile.isEmpty()) continue;
+
+                    if (tile.isVerticalTop()) continue;
+
+                    int relX = x - centerX;
+                    int relZ = z - centerZ;
+                    int worldCenterX = worldStartPos.blockX() + relX * cellStep;
+                    int worldCenterZ = worldStartPos.blockZ() + relZ * cellStep;
+                    int worldCenterY = worldStartPos.blockY() + l * layerStepY;
+
+                    if (tile.isMultiTilePart()) {
+                        if (!tile.isFootprintAnchor()) continue;
+
+                        Cluster cluster = tile.cluster();
+                        Rotation rot = tile.rotation();
+                        int fw = cluster.getFootprintWidth(rot);
+                        int fh = cluster.getFootprintHeight(rot);
+
+                        int[] bounds = cluster.getRotatedBounds(rot);
+                        int minRelX = bounds[0], maxRelX = bounds[1];
+                        int minRelZ = bounds[2], maxRelZ = bounds[3];
+                        int rotWidth = maxRelX - minRelX + 1;
+                        int rotLength = maxRelZ - minRelZ + 1;
+
+                        int footprintCenterX = worldCenterX + (fw - 1) * cellStep / 2;
+                        int footprintCenterZ = worldCenterZ + (fh - 1) * cellStep / 2;
+
+                        int baseX = footprintCenterX - rotWidth / 2 - minRelX;
+                        int baseZ = footprintCenterZ - rotLength / 2 - minRelZ;
+                        int baseY = worldCenterY;
+
+                        pasteCluster(instance, cluster, rot, new Vec(baseX, baseY, baseZ), defaultMarkerBlock);
+                    } else if (tile.segment() != null) {
+                        MineshaftSegment segment = tile.segment();
+                        Rotation rot = tile.rotation();
+
+                        Point c1 = CoordinateUtil.rotatePos(new Vec(0, 0, 0), rot);
+                        Point c2 = CoordinateUtil.rotatePos(new Vec(segment.getWidth() - 1, 0, 0), rot);
+                        Point c3 = CoordinateUtil.rotatePos(new Vec(0, 0, segment.getLength() - 1), rot);
+                        Point c4 = CoordinateUtil.rotatePos(new Vec(segment.getWidth() - 1, 0, segment.getLength() - 1), rot);
+
+                        int minRelX = (int) Math.min(Math.min(c1.x(), c2.x()), Math.min(c3.x(), c4.x()));
+                        int maxRelX = (int) Math.max(Math.max(c1.x(), c2.x()), Math.max(c3.x(), c4.x()));
+                        int minRelZ = (int) Math.min(Math.min(c1.z(), c2.z()), Math.min(c3.z(), c4.z()));
+                        int maxRelZ = (int) Math.max(Math.max(c1.z(), c2.z()), Math.max(c3.z(), c4.z()));
+
+                        int rotWidth = maxRelX - minRelX + 1;
+                        int rotLength = maxRelZ - minRelZ + 1;
+
+                        int baseX = worldCenterX - rotWidth / 2 - minRelX;
+                        int baseY = worldCenterY;
+                        int baseZ = worldCenterZ - rotLength / 2 - minRelZ;
+
+                        MineshaftGenerator.pasteSegment(instance, segment, new Vec(baseX, baseY, baseZ), rot,
+                                segment.getMarkerBlock() != null ? segment.getMarkerBlock() : defaultMarkerBlock);
+                    }
                 }
             }
         }
-        return false;
+    }
+
+    private void pasteCluster(Instance instance, Cluster cluster, Rotation rotation, Point basePos, Block markerBlock) {
+        if (cluster == null || cluster.getSchematic() == null) return;
+        Schematic schematic = cluster.getSchematic();
+        schematic.forEachBlock(rotation, (offset, block) -> {
+            if (markerBlock != null && block.compare(markerBlock)) {
+                instance.setBlock(basePos.add(offset.x(), offset.y(), offset.z()), Block.AIR);
+                return;
+            }
+            instance.setBlock(basePos.add(offset.x(), offset.y(), offset.z()), BlockHandlers.addHandler(block));
+        });
     }
 
     private record CellPos3D(int l, int x, int z) {}
