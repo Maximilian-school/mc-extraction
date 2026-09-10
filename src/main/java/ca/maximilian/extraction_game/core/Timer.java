@@ -1,5 +1,6 @@
 package ca.maximilian.extraction_game.core;
 
+import lombok.Getter;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.timer.Task;
 import net.minestom.server.timer.TaskSchedule;
@@ -10,9 +11,13 @@ import java.util.List;
 
 public class Timer {
 
+    @Getter
     private final int length;
+    @Getter
     private int timeLeft;
+    @Getter
     private Task countDownTask;
+    @Getter
     private boolean isFinished;
 
     private final List<Runnable> finishListeners = new ArrayList<>();
@@ -26,25 +31,12 @@ public class Timer {
         this((int) (duration.getSeconds() * 20));
     }
 
-    public int getLength() {
-        return length;
-    }
-
-    public int getTimeLeft() {
-        return timeLeft;
-    }
-
-    public boolean isFinished() {
-        return isFinished;
-    }
-
     public boolean isRunning() {
         return countDownTask != null && countDownTask.isAlive();
     }
 
-    public Timer onFinish(Runnable listener) {
+    public void onFinish(Runnable listener) {
         finishListeners.add(listener);
-        return this;
     }
 
     public void reset() {
