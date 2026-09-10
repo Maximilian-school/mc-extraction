@@ -1,6 +1,7 @@
-package ca.maximilian.extraction_game;
+package ca.maximilian.extraction_game.core;
 
 import ca.maximilian.extraction_game.core.handlers.block.BlockHandlers;
+import lombok.Getter;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.Component;
@@ -21,7 +22,6 @@ import net.minestom.server.event.player.PlayerDeathEvent;
 import net.minestom.server.event.player.PlayerEntityInteractEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
 import net.minestom.server.instance.Instance;
-import net.minestom.server.instance.InstanceContainer;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.inventory.Inventory;
 import net.minestom.server.inventory.InventoryType;
@@ -34,6 +34,7 @@ public class Cart {
 
     private final Inventory inventory = new Inventory(InventoryType.CHEST_1_ROW, Component.text("Minecart"));
 
+    @Getter
     private Player holdingPlayer;
 
     private Entity minecart;
@@ -48,11 +49,7 @@ public class Cart {
         Point pos = this.minecart.getPosition();
         Block block = this.minecart.getInstance().getBlock(pos);
 
-        if (block.solid()) {
-            return false;
-        }
-
-        return true;
+        return !block.solid();
     }
 
     public void spawnCart(Instance instance, Point position) {
@@ -177,10 +174,6 @@ public class Cart {
     public void clearItems() {
         inventory.clear();
         updatePassengers();
-    }
-
-    public Player getHoldingPlayer() {
-        return holdingPlayer;
     }
 
     public void setHoldingPlayer(Player holdingPlayer) {this.holdingPlayer = holdingPlayer;}

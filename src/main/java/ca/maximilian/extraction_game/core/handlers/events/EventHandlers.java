@@ -1,6 +1,6 @@
 package ca.maximilian.extraction_game.core.handlers.events;
 
-import ca.maximilian.extraction_game.Cart;
+import ca.maximilian.extraction_game.core.Cart;
 import ca.maximilian.extraction_game.ExtractionGame;
 import ca.maximilian.extraction_game.core.Constants;
 import ca.maximilian.extraction_game.core.GameState;
@@ -57,7 +57,7 @@ public class EventHandlers {
 
         if (event.getGameState().type().equals(GameStateType.STARTING)) {
             InstanceManager instanceManager = MinecraftServer.getInstanceManager();
-            InstanceContainer instanceContainer = instanceManager.createInstanceContainer();
+            InstanceContainer instanceContainer = instanceManager.createInstanceContainer(Constants.MAIN_DIMENSION);
 
             instanceContainer.setChunkSupplier(LightingChunk::new);
             instanceContainer.setGenerator(unit -> unit.modifier().fillHeight(-64, 318, Block.STONE));
@@ -67,25 +67,23 @@ public class EventHandlers {
             MineshaftGenerator.generateAsync(instanceContainer)
                     .thenApply(ignored -> instanceContainer)
                     .whenComplete((instance, failure) -> {
-                        if (failure != null) onStateChange(event);
+                        if (failure != null) System.out.println("Failed to generate mineshaft " + failure);
+
+                        ExtractionGame.MAIN_INSTANCE = instanceContainer;
+
+                        Cart cart = new Cart();
+                        ExtractionGame.CART = cart;
+
+                        cart.spawnCart(instanceContainer, new Pos(0, 1, 0));
+
+                        ExtractionGame.setGameState(new GameState(GameStateType.STARTED, null));
                     });
-
-            ExtractionGame.MAIN_INSTANCE = instanceContainer;
-
-            Cart cart = new Cart();
-            ExtractionGame.CART = cart;
-
-            cart.spawnCart(instanceContainer, new Pos(0, 1, 0));
-
-            MinecraftServer.getSchedulerManager().buildTask(() -> {
-                ExtractionGame.setGameState(new GameState(GameStateType.STARTED, null));
-            }).delay(Duration.ofSeconds(1)).schedule();
         }
 
         if (event.getGameState().type().equals(GameStateType.STARTED)) {
             for (Player player : ExtractionGame.LOBBY_INSTANCE.getPlayers()) {
                 player.setInstance(ExtractionGame.MAIN_INSTANCE);
-                player.setGameMode(GameMode.SPECTATOR);
+                player.setGameMode(GameMode.SURVIVAL);
                 player.getInventory().addItemStack(ItemStack.of(Material.IRON_PICKAXE));
             }
         }
