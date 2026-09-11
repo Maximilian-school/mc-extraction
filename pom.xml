@@ -12,7 +12,7 @@
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <exec.mainClass>ca.maximilian.extraction_game.ExtractionGame</exec.mainClass>
-        <lombok.version>1.18.34</lombok.version>
+        <lombok.version>1.18.42</lombok.version>
     </properties>
 
     <dependencyManagement>
@@ -87,9 +87,6 @@
                             <version>${lombok.version}</version>
                         </path>
                     </annotationProcessorPaths>
-                    <compilerArgs>
-                        <arg>-Xlint:-UnstableApiUsage</arg>
-                    </compilerArgs>
                 </configuration>
             </plugin>
 
