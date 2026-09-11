@@ -1,9 +1,8 @@
-package ca.maximilian.extraction_game.core.handlers.block;
+package ca.maximilian.extraction_game.core.handler.block;
 
 import ca.maximilian.extraction_game.ExtractionGame;
-import ca.maximilian.extraction_game.core.handlers.loot.TableSelectionHelper;
-import ca.maximilian.extraction_game.core.handlers.loot.tables.CommonLootTable;
-import ca.maximilian.extraction_game.core.handlers.loot.LootTable;
+import ca.maximilian.extraction_game.core.handler.loot.TableSelectionHelper;
+import ca.maximilian.extraction_game.core.handler.loot.LootTable;
 import ca.maximilian.extraction_game.core.utils.ItemPrices;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;

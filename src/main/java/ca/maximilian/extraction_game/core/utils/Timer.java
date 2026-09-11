@@ -1,4 +1,4 @@
-package ca.maximilian.extraction_game.core;
+package ca.maximilian.extraction_game.core.utils;
 
 import lombok.Getter;
 import net.minestom.server.MinecraftServer;

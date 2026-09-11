@@ -1,6 +1,6 @@
 package ca.maximilian.extraction_game.worldgen;
 
-import ca.maximilian.extraction_game.core.handlers.block.BlockHandlers;
+import ca.maximilian.extraction_game.core.handler.block.BlockHandlers;
 import net.hollowcube.schem.util.Rotation;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;

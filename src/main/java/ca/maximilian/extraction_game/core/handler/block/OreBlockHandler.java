@@ -1,4 +1,4 @@
-package ca.maximilian.extraction_game.core.handlers.block;
+package ca.maximilian.extraction_game.core.handler.block;
 
 import net.kyori.adventure.key.Key;
 import net.minestom.server.coordinate.BlockVec;

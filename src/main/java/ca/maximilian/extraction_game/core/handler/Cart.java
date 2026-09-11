@@ -1,10 +1,12 @@
-package ca.maximilian.extraction_game.core;
+package ca.maximilian.extraction_game.core.handler;
 
-import ca.maximilian.extraction_game.core.handlers.block.BlockHandlers;
+import ca.maximilian.extraction_game.core.handler.block.BlockHandlers;
+import ca.maximilian.extraction_game.core.utils.ItemPrices;
 import lombok.Getter;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.Component;
+import net.minestom.server.component.DataComponents;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
@@ -124,6 +126,8 @@ public class Cart {
 
             BlockHandlers.startDiggingPostCart(event);
         });
+
+        this.updateValueDisplay();
     }
 
     public void despawnCart() throws IllegalStateException {
@@ -138,6 +142,29 @@ public class Cart {
 
     public ItemStack[] getItems() {
         return Arrays.stream(inventory.getItemStacks()).filter(itemStack -> !itemStack.isAir()).toArray(ItemStack[]::new);
+    }
+
+    public double getCartValue() {
+        double sellValue = 0;
+
+        for (ItemStack itemStack : this.getItems()) {
+            sellValue += ItemPrices.sellValue(itemStack, false);
+        }
+
+        return sellValue;
+    }
+
+    public void sellAllItems(CustomPlayer customPlayer) {
+        double cartValue = this.getCartValue();
+        this.clearItems();
+
+        customPlayer.increaseMoney(cartValue);
+    }
+
+    public void sellAllItems(Player player) {
+        if (player instanceof CustomPlayer customPlayer) {
+            this.sellAllItems(customPlayer);
+        }
     }
 
     private void updatePassengers() {
@@ -160,6 +187,15 @@ public class Cart {
         this.updatePassengers();
     }
 
+    private void updateValueDisplay() {
+        double cartValue = this.getCartValue();
+
+        if (this.minecart == null) throw new IllegalStateException("Minecart is null");
+
+        this.minecart.set(DataComponents.CUSTOM_NAME, Component.text(String.valueOf(cartValue)));
+        this.minecart.setCustomNameVisible(true); // always (:
+    }
+
     public boolean addItem(ItemStack itemStack) {
         if (getItems().length >= inventory.getInnerSize()) {
             return false;
@@ -167,18 +203,23 @@ public class Cart {
 
         inventory.addItemStack(itemStack);
         updatePassengers();
+        this.updateValueDisplay();
 
         return true;
     }
 
     public void clearItems() {
         inventory.clear();
-        updatePassengers();
+        this.updatePassengers();
+        this.updateValueDisplay();
     }
 
-    public void setHoldingPlayer(Player holdingPlayer) {this.holdingPlayer = holdingPlayer;}
+    public void setHoldingPlayer(Player holdingPlayer) {
+        this.holdingPlayer = holdingPlayer;
+        this.updateValueDisplay();
+    }
 
-    public void tick(Event _event) {
+    public void tick(Event event) {
         if (minecart != null) {
             Player holdingPlayer = getHoldingPlayer();
 

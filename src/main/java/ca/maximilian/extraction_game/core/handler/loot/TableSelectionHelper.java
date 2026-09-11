@@ -1,7 +1,7 @@
-package ca.maximilian.extraction_game.core.handlers.loot;
+package ca.maximilian.extraction_game.core.handler.loot;
 
-import ca.maximilian.extraction_game.core.handlers.loot.tables.CommonLootTable;
-import ca.maximilian.extraction_game.core.handlers.loot.tables.UncommonLootTable;
+import ca.maximilian.extraction_game.core.handler.loot.tables.CommonLootTable;
+import ca.maximilian.extraction_game.core.handler.loot.tables.UncommonLootTable;
 import net.kyori.adventure.key.Key;
 
 import java.util.List;
