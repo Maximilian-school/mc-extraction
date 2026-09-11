@@ -162,9 +162,7 @@ public class Cart {
     }
 
     public void sellAllItems(Player player) {
-        if (player instanceof CustomPlayer customPlayer) {
-            this.sellAllItems(customPlayer);
-        }
+        this.sellAllItems((CustomPlayer) player);
     }
 
     private void updatePassengers() {
