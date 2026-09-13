@@ -1,11 +1,14 @@
 package ca.maximilian.extraction_game.core.handler;
 
-import ca.maximilian.extraction_game.core.handler.block.BlockHandlers;
+import ca.maximilian.extraction_game.Constants;
+import ca.maximilian.extraction_game.core.RunningGame;
+import ca.maximilian.extraction_game.core.handler.block.ButtonHandler;
 import ca.maximilian.extraction_game.core.utils.ItemPrices;
 import lombok.Getter;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.minestom.server.component.DataComponents;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
@@ -31,6 +34,7 @@ import net.minestom.server.item.ItemStack;
 import net.minestom.server.sound.SoundEvent;
 
 import java.util.Arrays;
+import java.util.List;
 
 public class Cart {
 
@@ -39,6 +43,7 @@ public class Cart {
     @Getter
     private Player holdingPlayer;
 
+    @Getter
     private Entity minecart;
 
     public Cart() {}
@@ -144,6 +149,15 @@ public class Cart {
         return Arrays.stream(inventory.getItemStacks()).filter(itemStack -> !itemStack.isAir()).toArray(ItemStack[]::new);
     }
 
+    public int getItemCount() {
+        int count = 0;
+        for (int i = 0; i < inventory.getItemStacks().length; i++) {
+            ItemStack itemStack = inventory.getItemStacks()[i];
+            count += itemStack.amount();
+        }
+        return count;
+    }
+
     public double getCartValue() {
         double sellValue = 0;
 
@@ -155,10 +169,38 @@ public class Cart {
     }
 
     public void sellAllItems(CustomPlayer customPlayer) {
+        List<Point> railsWithTagInRadius = ButtonHandler.findRailsInRadius(minecart.getInstance(), minecart.getPosition(),true);
+
+        if (railsWithTagInRadius.isEmpty()) {
+            customPlayer.playSound(Constants.ERROR_SOUND);
+            customPlayer.sendMessage(Component.text("The cart must be on the rail!").color(NamedTextColor.RED));
+            return;
+        }
+
+        RunningGame runningGame = minecart.getInstance().getTag(RunningGame.TAG);
+
+        if (runningGame == null) return;
+
         double cartValue = this.getCartValue();
+
+        if (cartValue <= 0) {
+            customPlayer.playSound(Constants.ERROR_SOUND);
+            customPlayer.sendMessage(Component.text("There is nothing in the cart to sell!").color(NamedTextColor.RED));
+            return;
+        }
+
+        runningGame.getParty().getAudience().playSound(Constants.SELL_SOUND);
+        runningGame.getParty().getAudience().sendMessage(customPlayer.getName().append(Component.text(" sold %s items for $%s".formatted(
+                this.getItemCount(), cartValue
+        ))).color(NamedTextColor.YELLOW));
+
         this.clearItems();
 
         customPlayer.increaseMoney(cartValue);
+
+        runningGame.getParty().updateSidebar();
+
+        this.updateValueDisplay();
     }
 
     public void sellAllItems(Player player) {
@@ -179,6 +221,8 @@ public class Cart {
 
             this.minecart.addPassenger(itemEntity);
         }
+
+        this.updateValueDisplay();
     }
 
     private void updatePassengers(Event event) {
@@ -190,7 +234,7 @@ public class Cart {
 
         if (this.minecart == null) throw new IllegalStateException("Minecart is null");
 
-        this.minecart.set(DataComponents.CUSTOM_NAME, Component.text(String.valueOf(cartValue)));
+        this.minecart.set(DataComponents.CUSTOM_NAME, Component.text("$" + cartValue));
         this.minecart.setCustomNameVisible(true); // always (:
     }
 

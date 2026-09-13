@@ -29,6 +29,13 @@ public class Constants {
             1.0f
     );
 
+    public static final Sound SELL_SOUND = Sound.sound(
+            SoundEvent.ENTITY_PLAYER_LEVELUP,
+            Sound.Source.MASTER,
+            1.0f,
+            1.0f
+    );
+
     public static final BossBar INTERMISSION_BOSSBAR = BossBar.bossBar(
             Component.text("Intermission"),
             1,
@@ -38,8 +45,6 @@ public class Constants {
 
     public static final RegistryKey<DimensionType> MAIN_DIMENSION = MinecraftServer.getDimensionTypeRegistry()
             .register("extraction:main", DimensionType.builder()
-                    .ambientLight(0.0F)
-                    .skylight(false)
-                    .skybox(DimensionType.Skybox.NONE)
+                    .ambientLight(1/15f)
                     .build());
 }

@@ -1,13 +1,11 @@
 package ca.maximilian.extraction_game.core.utils;
 
 public enum GameStateType {
-    INTERMISSION,
+    COLLAPSING,
+    LIGHTING,
+    GENERATED,
     STARTING,
-    STARTED,
-    ENDING,
-    ENDED,
 
-    // NON GAMEPLAY EVENTS
     CLEANED_UP,
-    FAILED_TO_GENERATE,
+    CRASHED,
 }
