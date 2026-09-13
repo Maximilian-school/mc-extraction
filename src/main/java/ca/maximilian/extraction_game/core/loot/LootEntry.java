@@ -1,4 +1,4 @@
-package ca.maximilian.extraction_game.core.handler.loot;
+package ca.maximilian.extraction_game.core.loot;
 
 import net.minestom.server.item.ItemStack;
 

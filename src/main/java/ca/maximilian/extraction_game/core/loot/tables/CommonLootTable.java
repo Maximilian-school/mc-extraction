@@ -1,7 +1,7 @@
-package ca.maximilian.extraction_game.core.handler.loot.tables;
+package ca.maximilian.extraction_game.core.loot.tables;
 
-import ca.maximilian.extraction_game.core.handler.loot.LootEntry;
-import ca.maximilian.extraction_game.core.handler.loot.LootTable;
+import ca.maximilian.extraction_game.core.loot.LootEntry;
+import ca.maximilian.extraction_game.core.loot.LootTable;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.minestom.server.item.ItemStack;
