@@ -1,29 +1,29 @@
 package ca.maximilian.extraction_game;
 
 import ca.maximilian.extraction_game.command.ExtractionCommands;
-import ca.maximilian.extraction_game.core.CoreLoop;
+import ca.maximilian.extraction_game.core.AmbientLightingChunk;
 import ca.maximilian.extraction_game.core.handler.CustomPlayer;
-import ca.maximilian.extraction_game.core.RunningGame;
-import ca.maximilian.extraction_game.core.handler.block.BlockHandlers;
-import ca.maximilian.extraction_game.core.handler.event.EventHandlers;
+import ca.maximilian.extraction_game.core.handler.BlockHandlers;
+import ca.maximilian.extraction_game.core.event.EventHandlers;
 import ca.maximilian.extraction_game.core.utils.ChestInventoryManager;
 import ca.maximilian.extraction_game.lobby.LobbyInstanceUtils;
 import ca.maximilian.extraction_game.lobby.Matchmaking;
-import ca.maximilian.extraction_game.lobby.Party;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.Style;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.minestom.server.MinecraftServer;
-import net.minestom.server.event.player.PlayerDisconnectEvent;
+import net.minestom.server.coordinate.ChunkRange;
+import net.minestom.server.instance.Chunk;
 import net.minestom.server.instance.Instance;
 import net.minestom.server.instance.InstanceManager;
 import net.minestom.server.instance.LightingChunk;
-import net.minestom.server.instance.block.Block;
 import net.minestom.server.registry.RegistryKey;
+import net.minestom.server.timer.TaskSchedule;
 import net.minestom.server.world.DimensionType;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 public class ExtractionGame {
 
@@ -48,25 +48,31 @@ public class ExtractionGame {
         InstanceManager instanceManager = MinecraftServer.getInstanceManager();
 
         RegistryKey<DimensionType> lobbyDimension = MinecraftServer.getDimensionTypeRegistry()
-                .register("minestom:lobby", DimensionType.builder()
-                        .ambientLight(1F)
+                .register("extraction:lobby", DimensionType.builder()
+                        .ambientLight(3/15F)
                         .skybox(DimensionType.Skybox.OVERWORLD)
                         .build());
 
         LOBBY_INSTANCE = instanceManager.createInstanceContainer(lobbyDimension);
+        LOBBY_INSTANCE.setChunkSupplier(AmbientLightingChunk::new);
         LobbyInstanceUtils.placeLobbySchematic();
-        LOBBY_INSTANCE.setChunkSupplier(LightingChunk::new);
 
-        MinecraftServer.getGlobalEventHandler().addListener(PlayerDisconnectEvent.class, event -> {
-            Party party = Matchmaking.getPartyWithPlayer(event.getPlayer());
+        List<CompletableFuture<Chunk>> chunks = new ArrayList<>();
+        ChunkRange.chunksInRange(-8, -8, 16, (x, z) -> chunks.add(LOBBY_INSTANCE.loadChunk(x, z)));
 
-            if (party == null) return;
-
-            party.removePlayer((CustomPlayer) event.getPlayer(), false);
-        });
+        CompletableFuture.allOf(chunks.toArray(CompletableFuture[]::new))
+                .thenRun(() -> {
+                    LightingChunk.relight(LOBBY_INSTANCE, LOBBY_INSTANCE.getChunks());
+                });
 
         EventHandlers.register();
-        CoreLoop.start();
+
+        MinecraftServer.getSchedulerManager().buildTask(Matchmaking::tickParties).repeat(TaskSchedule.tick(1)).schedule();
+
+        /*
+         * Forces Constants' static initializer (and the dimension type registration) to run before any player can connect
+         */
+        Constants.MAIN_DIMENSION.key();
 
         minecraftServer.start("0.0.0.0", 25565);
     }
