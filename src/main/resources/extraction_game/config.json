@@ -8,7 +8,32 @@
     },
     {
       "id": "straight",
-      "file": "straight.nbt",
+      "file": [
+        {
+          "file": "straight/straight.nbt",
+          "weight": 100.0
+        },
+        {
+          "file": "straight/straight_caved_in.nbt",
+          "weight": 25.0
+        },
+        {
+          "file": "straight/straight_collapsed.nbt",
+          "weight": 50.0
+        },
+        {
+          "file": "straight/straight_maze.nbt",
+          "weight": 10.0
+        },
+        {
+          "file": "straight/straight_variant_2.nbt",
+          "weight": 90.0
+        },
+        {
+          "file": "straight/straight_weathered.nbt",
+          "weight": 15.0
+        }
+      ],
       "weight": 5.0,
       "maxConsecutiveStraight": 3,
       "minSpacing": 0
@@ -31,14 +56,23 @@
       "id": "deadend",
       "file": [
         {
-          "file": "deadend.nbt"
+          "file": "deadend.nbt",
+          "weight": 25.0
         },
         {
-          "file": "deadend_2.nbt"
+          "file": "deadend_2.nbt",
+          "weight": 100.0
+        },
+        {
+          "file": "deadend_loot.nbt",
+          "weight": 1.0
         }
       ],
       "weight": 2.0,
-      "minSpacing": 2
+      "minSpacing": 2,
+      "blacklist": [
+        "centre"
+      ]
     },
     {
       "id": "tjunction",
@@ -52,15 +86,45 @@
       "file": "stairwell.nbt",
       "weight": 4.5,
       "maxConsecutiveStraight": 1,
-      "minSpacing": 6
+      "minSpacing": 6,
+      "blacklist": [
+        "deadend"
+      ],
+      "requiresConnection": {
+        "anyOf": ["tjunction", "crossroads", "coal_room", "room"],
+        "maxDistance": -1
+      }
     },
     {
       "id": "coal_room",
       "file": "coal_room.nbt",
-      "weight": 2.0,
+      "weight": 3.0,
       "maxConsecutiveStraight": 1,
       "multi_tile": { "width": 3, "height": 3 },
-      "minSpacing": 20
+      "minSpacing": 5,
+      "minAppearances": 1,
+      "maxAppearances": 3,
+      "blacklist": ["room", "management"]
+    },
+    {
+      "id": "room",
+      "file": "room.nbt",
+      "weight": 5.0,
+      "maxConsecutiveStraight": 1,
+      "multi_tile": { "width": 3, "height": 3 },
+      "minSpacing": 5,
+      "minAppearances": 1,
+      "maxAppearances": 3
+    },
+    {
+      "id": "management",
+      "file": "management.nbt",
+      "weight": 2.0,
+      "maxConsecutiveStraight": 1,
+      "multi_tile": { "width": 3, "height": 3, "layers": 2 },
+      "minSpacing": 5,
+      "minAppearances": 1,
+      "maxAppearances": 1
     }
   ]
 }
