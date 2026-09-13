@@ -1,4 +1,4 @@
-package ca.maximilian.extraction_game.core.handler.block;
+package ca.maximilian.extraction_game.core.handler;
 
 import ca.maximilian.extraction_game.Constants;
 import ca.maximilian.extraction_game.core.utils.ItemPrices;

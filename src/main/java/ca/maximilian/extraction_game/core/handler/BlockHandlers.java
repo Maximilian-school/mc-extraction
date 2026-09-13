@@ -1,24 +1,21 @@
-package ca.maximilian.extraction_game.core.handler.block;
+package ca.maximilian.extraction_game.core.handler;
 
+import ca.maximilian.extraction_game.core.handler.block.*;
 import ca.maximilian.extraction_game.core.utils.DropItem;
-import ca.maximilian.extraction_game.core.utils.ItemPrices;
 import net.minestom.server.MinecraftServer;
-import net.minestom.server.entity.ItemEntity;
 import net.minestom.server.event.player.PlayerBlockBreakEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.instance.block.BlockManager;
 import net.minestom.server.item.ItemStack;
-import net.minestom.server.item.Material;
 import net.minestom.server.utils.block.BlockBreakCalculation;
-
-import java.time.Duration;
 
 public class BlockHandlers {
     public static void registerBlockHandlers() {
         MinecraftServer.getBlockManager().registerHandler("minecraft:chest", ChestHandler::new);
         MinecraftServer.getBlockManager().registerHandler("minecraft:rail", RailHandler::new);
         MinecraftServer.getBlockManager().registerHandler("minecraft:oak_button", ButtonHandler::new);
+        MinecraftServer.getBlockManager().registerHandler("minecraft:oak_door", DoorHandler::new);
     }
 
     public static Block addHandler(Block block) {
@@ -26,6 +23,7 @@ public class BlockHandlers {
 
         if (block.name().contains("rail")) return block.withHandler(blockManager.getHandler("minecraft:rail"));
         if (block.name().contains("button")) return block.withHandler(blockManager.getHandler("minecraft:oak_button"));
+        if (block.name().contains("door")) return block.withHandler(blockManager.getHandler("minecraft:oak_door"));
 
         return block;
     }
@@ -43,7 +41,7 @@ public class BlockHandlers {
                     DropItem.dropItem(event.getInstance(), event.getBlockPosition(), itemStack);
                 }
             } else {
-                event.setCancelled(true);
+//                event.setCancelled(true);
             }
         }
     }
