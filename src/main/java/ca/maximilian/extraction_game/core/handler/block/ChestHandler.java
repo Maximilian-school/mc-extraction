@@ -1,10 +1,12 @@
 package ca.maximilian.extraction_game.core.handler.block;
 
 import ca.maximilian.extraction_game.ExtractionGame;
-import ca.maximilian.extraction_game.core.handler.loot.TableSelectionHelper;
-import ca.maximilian.extraction_game.core.handler.loot.LootTable;
+import ca.maximilian.extraction_game.core.loot.LootTable;
+import ca.maximilian.extraction_game.core.loot.TableSelectionHelper;
+import ca.maximilian.extraction_game.core.utils.DropItem;
 import ca.maximilian.extraction_game.core.utils.ItemPrices;
 import net.kyori.adventure.key.Key;
+import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.Component;
 import net.minestom.server.entity.GameMode;
 import net.minestom.server.event.inventory.InventoryCloseEvent;
@@ -13,6 +15,7 @@ import net.minestom.server.inventory.Inventory;
 import net.minestom.server.inventory.InventoryType;
 import net.minestom.server.item.ItemStack;
 import net.minestom.server.network.packet.server.play.BlockActionPacket;
+import net.minestom.server.sound.SoundEvent;
 import org.jspecify.annotations.NonNull;
 
 import java.util.ArrayList;
@@ -23,7 +26,7 @@ public class ChestHandler implements BlockHandler {
 
     @Override
     public void onPlace(@NonNull Placement placement) {
-        LootTable lootTable = TableSelectionHelper.getTable(placement.getBlock().nbt().getString("CustomName"));
+        LootTable lootTable = TableSelectionHelper.getTable(placement.getBlock().nbt().getString("CustomName"), placement.getBlockPosition().asBlockVec());
         List<ItemStack> loot = lootTable.roll();
 
         Inventory inventory = ExtractionGame.chestInventoryManager.create(
@@ -63,6 +66,9 @@ public class ChestHandler implements BlockHandler {
                             placement.getBlock()
                     );
                     placement.getInstance().sendGroupedPacket(closePacket);
+
+                    Sound closeSound = Sound.sound(SoundEvent.BLOCK_CHEST_CLOSE, Sound.Source.BLOCK, 1.0f, 1.0f);
+                    placement.getInstance().playSound(closeSound, placement.getBlockPosition());
                 }
             }
         });
@@ -70,22 +76,39 @@ public class ChestHandler implements BlockHandler {
 
     @Override
     public void onDestroy(@NonNull Destroy destroy) {
+        Inventory inventory = ExtractionGame.chestInventoryManager.get(destroy.getInstance(), destroy.getBlockPosition());
 
+        ExtractionGame.chestInventoryManager.remove(destroy.getInstance(), destroy.getBlockPosition());
+
+
+        for (ItemStack itemStack : inventory.getItemStacks()) {
+            DropItem.dropItem(destroy.getInstance(), destroy.getBlockPosition(), itemStack);
+        }
     }
 
     @Override
     public boolean onInteract(Interaction interaction) {
         Inventory inventory = ExtractionGame.chestInventoryManager.get(interaction.getInstance(), interaction.getBlockPosition());
+
+        long activeViewers = inventory.getViewers().stream()
+                .filter(viewer -> viewer.getGameMode() != GameMode.SPECTATOR)
+                .count();
+
         interaction.getPlayer().openInventory(inventory);
 
         if (interaction.getPlayer().getGameMode() != GameMode.SPECTATOR) {
-            BlockActionPacket openPacket = new BlockActionPacket(
-                    interaction.getBlockPosition(),
-                    (byte) 1,
-                    (byte) 1,
-                    interaction.getBlock()
-            );
-            interaction.getInstance().sendGroupedPacket(openPacket);
+            if (activeViewers == 0) {
+                BlockActionPacket openPacket = new BlockActionPacket(
+                        interaction.getBlockPosition(),
+                        (byte) 1,
+                        (byte) 1,
+                        interaction.getBlock()
+                );
+                interaction.getInstance().sendGroupedPacket(openPacket);
+
+                Sound openSound = Sound.sound(SoundEvent.BLOCK_CHEST_OPEN, Sound.Source.BLOCK, 1.0f, 1.0f);
+                interaction.getInstance().playSound(openSound, interaction.getBlockPosition());
+            }
         }
 
         return true;
