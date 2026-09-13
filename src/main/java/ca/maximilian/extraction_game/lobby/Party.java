@@ -11,17 +11,14 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Player;
-import net.minestom.server.instance.Instance;
+import net.minestom.server.scoreboard.Sidebar;
 import org.jetbrains.annotations.Nullable;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.List;
+import java.util.UUID;
+import java.util.stream.Stream;
 
 public class Party {
 
@@ -35,7 +32,7 @@ public class Party {
     private List<CustomPlayer> kickedPlayers = new ArrayList<>();
 
     @Getter
-    private List<TemporaryPassword> temporaryPasswords = new ArrayList<>();
+    private List<Invite> invites = new ArrayList<>();
 
     @Getter
     private final List<CustomPlayer> players = new ArrayList<>();
@@ -47,6 +44,9 @@ public class Party {
     @Setter
     private int maximumPlayers;
 
+    @Getter
+    private Sidebar sidebar = new Sidebar(Component.text("Mineshaft"));
+
     public Party(CustomPlayer host, @Nullable String password, int maximumPlayers) throws IllegalStateException {
         if (Matchmaking.getPartyWithPlayer(host) != null) {
             throw new IllegalStateException("You are already in a party!");
@@ -57,10 +57,44 @@ public class Party {
         this.maximumPlayers = maximumPlayers;
 
         this.players.add(host);
+
+        sidebar.addViewer(host);
+        updateSidebar();
+    }
+
+    public void updateSidebar() {
+        for (Sidebar.ScoreboardLine line : sidebar.getLines()) {
+            sidebar.removeLine(line.getId());
+        }
+
+        int playerIndex = players.size();
+
+        Stream<CustomPlayer> playersSorted = players.stream().sorted((a, b) -> Double.compare(b.getMoney(), a.getMoney()));
+
+        for (CustomPlayer player : playersSorted.toList()) {
+            int lineScore = playerIndex--;
+
+            sidebar.createLine(new Sidebar.ScoreboardLine(
+                    player.getUsername(),
+                    player.getName().append(Component.text(" $" + player.getMoney())),
+                    lineScore,
+                    Sidebar.NumberFormat.blank()
+            ));
+        }
     }
 
     public boolean isPublic() {
         return password == null;
+    }
+
+    public boolean isRunning() {
+        return this.runningGame != null;
+    }
+
+    public void setCrashed() {
+        if (this.runningGame != null) {
+            this.runningGame = null;
+        }
     }
 
     public boolean isFull() {
@@ -71,22 +105,23 @@ public class Party {
         FULL,
         ALREADY_IN_LOBBY,
         INCORRECT_PASSWORD,
+        INVITE_EXPIRED,
         NOT_ALLOWED,
         PLAYING,
 
         JOINED,
     }
 
-    public TemporaryPassword addTemporaryPassword() {
-        TemporaryPassword temporaryPassword = new TemporaryPassword();
+    public Invite invitePlayer(CustomPlayer player) {
+        Invite invite = new Invite(player);
 
-        temporaryPasswords.add(temporaryPassword);
+        invites.add(invite);
 
-        return temporaryPassword;
+        return invite;
     }
 
     public JoinStatus addPlayer(CustomPlayer player, @Nullable String password) {
-        if (this.runningGame != null) {
+        if (isRunning()) {
             player.sendMessage(Component.text("Party is already playing!").color(NamedTextColor.RED));
             player.playSound(Constants.ERROR_SOUND);
             return JoinStatus.PLAYING;
@@ -105,24 +140,32 @@ public class Party {
         }
 
         if (this.password != null && !this.password.equals(password)) {
-            boolean wasTemporary = false;
+            @Nullable Invite playersInvite = null;
 
-            Iterator<TemporaryPassword> iterator = this.temporaryPasswords.iterator();
-            while (iterator.hasNext()) {
-                TemporaryPassword temporaryPassword = iterator.next();
-
-                if (temporaryPassword.getPassword().equals(password) && temporaryPassword.isValid()) {
-                    iterator.remove();
-                    wasTemporary = true;
+            for (Invite invite : this.invites) {
+                if (invite.getPlayer().equals(player)) {
+                    playersInvite = invite;
                     break;
-                } else if (!temporaryPassword.isValid()) {
-                    player.sendMessage(Component.text("Your invite has been invalidated, likely you waited too long!").color(NamedTextColor.RED));
-                    player.playSound(Constants.ERROR_SOUND);
-                    return JoinStatus.INCORRECT_PASSWORD;
                 }
             }
 
-            if (!wasTemporary) {
+            if (playersInvite != null) {
+
+                if (playersInvite.expired()) {
+                    player.sendMessage(Component.text("That invite has expired!").color(NamedTextColor.RED));
+                    player.playSound(Constants.ERROR_SOUND);
+                    return JoinStatus.INVITE_EXPIRED;
+                }
+
+                if (playersInvite.used()) {
+                    player.sendMessage(Component.text("That invite has been used!").color(NamedTextColor.RED));
+                    player.playSound(Constants.ERROR_SOUND);
+                    return JoinStatus.INVITE_EXPIRED;
+                }
+
+                playersInvite.use();
+
+            } else {
                 player.sendMessage(Component.text("That is not the correct password!").color(NamedTextColor.RED));
                 player.playSound(Constants.ERROR_SOUND);
                 return JoinStatus.INCORRECT_PASSWORD;
@@ -148,39 +191,36 @@ public class Party {
         ))).color(NamedTextColor.YELLOW));
         getAudience().playSound(Constants.SUCCESS_SOUND);
 
+        sidebar.addViewer(player);
+
+        updateSidebar();
+
         return JoinStatus.JOINED;
     }
 
-    public void removePlayer(CustomPlayer player, boolean kick) throws NotInPartyException {
+    public boolean removePlayer(CustomPlayer player, boolean kick) throws NotInPartyException {
         if (!players.contains(player)) {
             throw new NotInPartyException(Component.text("You are not in this party!"));
         }
 
         if (kick) {
             getKickedPlayers().add(player);
-        } else {
-            if (this.runningGame != null) {
-                player.sendMessage(Component.text("You cannot leave the party while in match!").color(NamedTextColor.RED));
-                player.playSound(Constants.ERROR_SOUND);
-                return;
-            }
+        } else if (isRunning()) {
+            player.sendMessage(Component.text("You cannot leave the party while in match!").color(NamedTextColor.RED));
+            player.playSound(Constants.ERROR_SOUND);
+            return false;
         }
 
         players.remove(player);
 
         if (players.isEmpty()) {
             Matchmaking.removeParty(this);
-
-            return;
+            return true;
         }
 
         Component playerDisplayName = (player.getDisplayName() != null)
                 ? player.getDisplayName()
                 : player.getName();
-
-        Component oldHostDisplayName = (host.getDisplayName() != null)
-                ? host.getDisplayName()
-                : host.getName();
 
         if (getHost() == player) {
             this.host = getPlayers().getFirst();
@@ -191,9 +231,9 @@ public class Party {
 
             for (CustomPlayer p : players) {
                 if (p == getHost()) {
-                    p.sendMessage(Component.text("Since ").append(oldHostDisplayName).append(Component.text(" left, you are now the host!")));
+                    p.sendMessage(Component.text("Since ").append(playerDisplayName).append(Component.text(" left, you are now the host!")));
                 } else {
-                    p.sendMessage(Component.text("Since ").append(oldHostDisplayName).append(Component.text(" left, ")).append(newHostDisplayName).append(Component.text(" is the new host!")));
+                    p.sendMessage(Component.text("Since ").append(playerDisplayName).append(Component.text(" left, ")).append(newHostDisplayName).append(Component.text(" is the new host!")));
                 }
             }
         }
@@ -203,9 +243,17 @@ public class Party {
         ))).color(NamedTextColor.YELLOW));
         getAudience().playSound(Constants.SUCCESS_SOUND);
 
-        if (kick && player.getInstance() == this.runningGame.getInstance()) {
+        // runningGame can be null here (e.g. kicking someone from a party that never started),
+        // so guard it instead of blindly calling .getInstance() on it like before.
+        if (kick && isRunning() && player.getInstance() == this.runningGame.getInstance()) {
             player.kick(Component.text("You have been kicked from this party!"));
         }
+
+        sidebar.removeLine(player.getUsername());
+
+        sidebar.removeViewer(player);
+
+        return true;
     }
 
     public Audience getAudience() {
@@ -213,11 +261,23 @@ public class Party {
     }
 
     public void start() {
-        if (this.runningGame != null) return;
+        if (isRunning()) return;
         this.runningGame = new RunningGame(this);
+    }
 
-        for (Player player : getPlayers()) {
-            player.setInstance(runningGame.getInstance(), new Pos(0.5, 0, 0.5));
+    /**
+     * If needed, the party can run code on every tick.
+     * When possible, use events.
+     */
+    public void tickParty() {
+        if (isRunning()) {
+            if (!this.invites.isEmpty()) {
+                this.invites.clear();
+            }
+        }
+
+        if (players.isEmpty()) {
+            Matchmaking.removeParty(this);
         }
     }
 }

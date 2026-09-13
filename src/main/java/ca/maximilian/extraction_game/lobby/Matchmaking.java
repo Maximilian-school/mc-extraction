@@ -12,11 +12,19 @@ public class Matchmaking {
     @Getter
     private static final List<Party> parties = new ArrayList<Party>();
 
+    public static void tickParties() {
+        for (Party party : parties) {
+            party.tickParty();
+        }
+    }
+
     public static Party getLargestJoinableParty(CustomPlayer player) {
         Party largestPublicParty = null;
 
         for (Party party : parties) {
             if (!party.isPublic()) continue;
+
+            if (party.isRunning()) continue;
 
             if (party.getKickedPlayers().contains(player)) {
                 continue;
