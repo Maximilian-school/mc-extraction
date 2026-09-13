@@ -8,5 +8,6 @@ public class ExtractionCommands {
         CommandManager commandManager = MinecraftServer.getCommandManager();
 
         commandManager.register(new PartyCommand());
+        commandManager.register(new GameModeCommand());
     }
 }
