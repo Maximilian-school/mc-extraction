@@ -19,15 +19,16 @@ public class Cluster {
     private final Rotation defaultRotation;
     private final int minAppearances;
     private final int maxAppearances;
+    private final int minSpacing;
 
     public Cluster(String id, Schematic schematic, Set<Connector> connectors, int multiTileWidth, int multiTileHeight, int multiTileLayers, double weight, boolean starting, Rotation defaultRotation) {
-        this(id, schematic, connectors, multiTileWidth, multiTileHeight, multiTileLayers, weight, starting, defaultRotation, -1, -1);
+        this(id, schematic, connectors, multiTileWidth, multiTileHeight, multiTileLayers, weight, starting, defaultRotation, -1, -1, 0);
     }
 
-    /** Full constructor, including optional per-cluster spawn count limits (-1 means unset / no limit). */
+    /** Full constructor, including optional per-cluster spawn count limits (-1 means unset / no limit) and minSpacing (0 means unset). */
     public Cluster(String id, Schematic schematic, Set<Connector> connectors, int multiTileWidth, int multiTileHeight,
                    int multiTileLayers, double weight, boolean starting, Rotation defaultRotation,
-                   int minAppearances, int maxAppearances) {
+                   int minAppearances, int maxAppearances, int minSpacing) {
         this.id = id;
         this.schematic = schematic;
         this.connectors = connectors != null ? connectors : new HashSet<>();
@@ -39,6 +40,7 @@ public class Cluster {
         this.defaultRotation = defaultRotation;
         this.minAppearances = minAppearances;
         this.maxAppearances = maxAppearances;
+        this.minSpacing = minSpacing;
     }
 
     public String getId() { return id; }
@@ -65,6 +67,7 @@ public class Cluster {
     public int getMaxAppearances() { return maxAppearances; }
     public boolean hasMinAppearances() { return minAppearances > 0; }
     public boolean hasMaxAppearances() { return maxAppearances > 0; }
+    public int getMinSpacing() { return minSpacing; }
 
     public int getFootprintWidth(Rotation rot) {
         boolean swapped = rot == Rotation.CLOCKWISE_90 || rot == Rotation.CLOCKWISE_270;

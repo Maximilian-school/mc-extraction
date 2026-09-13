@@ -1,6 +1,7 @@
 package ca.maximilian.extraction_game.worldgen;
 
-import ca.maximilian.extraction_game.core.handler.block.BlockHandlers;
+import ca.maximilian.extraction_game.core.handler.BlockHandlers;
+import lombok.Getter;
 import net.hollowcube.schem.Schematic;
 import net.hollowcube.schem.util.CoordinateUtil;
 import net.hollowcube.schem.util.Rotation;
@@ -14,32 +15,23 @@ import java.util.*;
 public class WaveFunctionCollapse {
 
     private static final int MIN_DEAD_END_DISTANCE = 256;
+    private static final int MAX_RECONNECT_DISTANCE = 20;
 
+    @Getter
     private final int layers;
+    @Getter
     private final int width;
+    @Getter
     private final int height;
     private final int cellStep;
     private final List<WfcTile> prototypes;
-    private final List<MineshaftSegment> multiTileSegments;
     private final Random random;
     private final Map<String, int[]> appearanceLimits; // id -> {min, max}, -1 means unset
+    private final Map<String, Set<String>> connectionBlacklist; // id -> set of ids it may never have an open doorway into
+    private final Map<String, ConnectionRequirement> connectionRequirements; // id -> ids it must connect to, direct or indirect
 
-    public WaveFunctionCollapse(
-            int width,
-            int height,
-            int cellStep,
-            List<MineshaftSegment> availableSegments,
-            Random random
-    ) {
-        this(
-                hasVerticalSegment(availableSegments) ? 2 : 1,
-                width,
-                height,
-                cellStep,
-                availableSegments,
-                random
-        );
-    }
+    /** allowedIds: the other ids that satisfy the requirement. maxDistance <= 0 means "anywhere reachable", a positive number caps the room-hop distance. */
+    private record ConnectionRequirement(Set<String> allowedIds, int maxDistance) {}
 
     public WaveFunctionCollapse(
             int layers,
@@ -55,12 +47,22 @@ public class WaveFunctionCollapse {
         this.cellStep = cellStep;
         this.random = random != null ? random : new Random();
         this.prototypes = new ArrayList<>();
-        this.multiTileSegments = new ArrayList<>();
+        List<MineshaftSegment> multiTileSegments = new ArrayList<>();
         this.appearanceLimits = new HashMap<>();
+        this.connectionBlacklist = new HashMap<>();
+        this.connectionRequirements = new HashMap<>();
 
         for (MineshaftSegment segment : availableSegments) {
             if (segment.hasMinAppearances() || segment.hasMaxAppearances()) {
                 appearanceLimits.put(segment.getId(), new int[]{segment.getMinAppearances(), segment.getMaxAppearances()});
+            }
+            if (segment.getConnectBlacklist() != null && !segment.getConnectBlacklist().isEmpty()) {
+                connectionBlacklist.computeIfAbsent(segment.getId(), k -> new HashSet<>())
+                        .addAll(segment.getConnectBlacklist());
+            }
+            if (segment.hasRequiredConnections()) {
+                connectionRequirements.put(segment.getId(),
+                        new ConnectionRequirement(segment.getRequiredConnections(), segment.getRequiredConnectionMaxDistance()));
             }
             if (isCenterSegmentId(segment.getId())) {
                 // Force-placed once at the true grid center, see seedCenterCluster.
@@ -82,7 +84,8 @@ public class WaveFunctionCollapse {
                         false,
                         Rotation.NONE,
                         segment.getMinAppearances(),
-                        segment.getMaxAppearances()
+                        segment.getMaxAppearances(),
+                        segment.getMinSpacing()
                 );
                 multiTileSegments.add(segment);
                 for (Rotation rot : Rotation.values()) {
@@ -120,7 +123,7 @@ public class WaveFunctionCollapse {
         return segment.getHeight() > 5;
     }
 
-    /** Matches the special always-centered hub segment, "centre" or "center", case insensitive. */
+    /** Matches the special always-centered hub segment, "centre" or "center", case-insensitive. */
     private static boolean isCenterSegmentId(String id) {
         if (id == null) return false;
         String lower = id.toLowerCase();
@@ -136,36 +139,6 @@ public class WaveFunctionCollapse {
         if (lower.contains("deadend") || lower.contains("dead_end")) return 2.0;
         if (lower.contains("stairwell") || lower.contains("stairs") || lower.contains("stair")) return 4.5;
         return 3.0;
-    }
-
-    public int getLayers() {
-        return layers;
-    }
-
-    public int getWidth() {
-        return width;
-    }
-
-    public int getHeight() {
-        return height;
-    }
-
-    public WfcTile[][] solve() {
-        WfcTile[][][] res = solve3D(100);
-        return res[0];
-    }
-
-    public WfcTile[][] solve(int maxAttempts) {
-        WfcTile[][][] res = solve3D(maxAttempts);
-        return res[0];
-    }
-
-    public WfcTile[][][] solve3D() {
-        return solve3D(100);
-    }
-
-    public WfcTile[][][] solve3D(int maxAttempts) {
-        return solve3D(maxAttempts, Vec.ZERO);
     }
 
     public WfcTile[][][] solve3D(int maxAttempts, Point worldStartPos) {
@@ -185,13 +158,13 @@ public class WaveFunctionCollapse {
                         }
                     }
                     if (stairCount > 0) {
-                        pruneUnreachable(result);
-                        return result;
+                        WfcTile[][][] finalized = finalizeIfValid(result);
+                        if (finalized != null) return finalized;
                     }
                     if (fallback == null) fallback = result;
                 } else {
-                    pruneUnreachable(result);
-                    return result;
+                    WfcTile[][][] finalized = finalizeIfValid(result);
+                    if (finalized != null) return finalized;
                 }
             }
         }
@@ -199,13 +172,19 @@ public class WaveFunctionCollapse {
         for (int attempt = 0; attempt < maxAttempts; attempt++) {
             WfcTile[][][] result = runWfc(worldStartPos, true);
             if (result != null) {
-                pruneUnreachable(result);
-                return result;
+                WfcTile[][][] finalized = finalizeIfValid(result);
+                if (finalized != null) return finalized;
+                if (fallback == null) fallback = result;
             }
         }
 
         if (fallback != null) {
+            WfcTile[][][] finalized = finalizeIfValid(fallback);
+            if (finalized != null) return finalized;
+            // Ran out of attempts with nothing satisfying every requiresConnection rule.
+            // Rather than crash the whole generation, ship the fallback anyway and say so.
             pruneUnreachable(fallback);
+            System.out.println("[WFC] exhausted all attempts without satisfying every requiresConnection rule, using best-effort layout");
             return fallback;
         }
 
@@ -234,7 +213,7 @@ public class WaveFunctionCollapse {
         Map<String, Integer> appearanceCounts = new HashMap<>();
 
         // Force the centre/center cluster into the true grid center before anything
-        // else collapses. This is the anchor the rest of the map grows from, without
+        // else collapses. This is the anchor the rest of the map grows from. Without
         // it the very first cell has no committed neighbor, so chooseWeighted's
         // "no incoming socket" branch coin-flips between empty and non-empty, which
         // is exactly what was producing sparse isolated single tiles.
@@ -295,7 +274,7 @@ public class WaveFunctionCollapse {
                     int fh = cluster.getFootprintHeight(t.rotation());
                     int flayers = cluster.getFootprintLayers();
                     Map<Cluster.FootprintCell, Set<Direction>> sockets = cluster.getFootprintSockets(t.rotation(), cellStep);
-                    if (!canPlaceCluster(grid, nextCell.x(), nextCell.z(), nextCell.l(), fw, fh, flayers, sockets)) {
+                    if (!canPlaceCluster(grid, nextCell.x(), nextCell.z(), nextCell.l(), fw, fh, flayers, sockets, cluster.getId())) {
                         continue;
                     }
                 }
@@ -331,7 +310,7 @@ public class WaveFunctionCollapse {
         for (int l = 0; l < layers; l++) {
             for (int x = 0; x < width; x++) {
                 for (int z = 0; z < height; z++) {
-                    result[l][x][z] = grid[l][x][z].get(0);
+                    result[l][x][z] = grid[l][x][z].getFirst();
                 }
             }
         }
@@ -343,7 +322,7 @@ public class WaveFunctionCollapse {
      * "center" and forcibly reserves its footprint dead center in the grid,
      * using the same reservation path a normal cluster placement would use.
      * Returns false (no-op) if no such segment exists in the loaded config,
-     * so this is entirely opt in.
+     * so this is entirely opt-in.
      */
     private boolean seedCenterCluster(List<WfcTile>[][][] grid, Queue<CellPos3D> queue, Map<String, Integer> appearanceCounts) {
         WfcTile anchor = prototypes.stream()
@@ -376,7 +355,7 @@ public class WaveFunctionCollapse {
     }
 
     private boolean canPlaceCluster(List<WfcTile>[][][] grid, int x, int z, int l, int fw, int fh, int flayers,
-                                    Map<Cluster.FootprintCell, Set<Direction>> sockets) {
+                                    Map<Cluster.FootprintCell, Set<Direction>> sockets, String clusterId) {
         if (x + fw > width || z + fh > height || l + flayers > layers) return false;
         for (int i = 0; i < fw; i++) {
             for (int j = 0; j < fh; j++) {
@@ -400,8 +379,12 @@ public class WaveFunctionCollapse {
                         }
                         List<WfcTile> outsideDomain = grid[gl][outX][outZ];
                         if (outsideDomain.size() == 1) {
-                            boolean outsideOpen = outsideDomain.get(0).isOpen(dir.opposite());
+                            WfcTile outsideTile = outsideDomain.get(0);
+                            boolean outsideOpen = outsideTile.isOpen(dir.opposite());
                             if (outsideOpen != open) return false;
+                            if (open && outsideOpen && !isConnectionAllowed(clusterId, appearanceKey(outsideTile))) {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -459,7 +442,7 @@ public class WaveFunctionCollapse {
                 for (WfcTile neighborTile : neighborDomain) {
                     boolean compatibleWithAtLeastOne = false;
                     for (WfcTile currTile : currDomain) {
-                        if (currTile.isHorizontalCompatible(neighborTile, dir)) {
+                        if (currTile.isHorizontalCompatible(neighborTile, dir) && isConnectionAllowed(currTile, neighborTile, dir)) {
                             compatibleWithAtLeastOne = true;
                             break;
                         }
@@ -579,12 +562,12 @@ public class WaveFunctionCollapse {
             int nx = x + getDirX(dir);
             int nz = z + getDirZ(dir);
             if (nx >= 0 && nx < width && nz >= 0 && nz < height) {
-                if (grid[l][nx][nz].size() == 1 && grid[l][nx][nz].get(0).isOpen(dir.opposite())) {
+                if (grid[l][nx][nz].size() == 1 && grid[l][nx][nz].getFirst().isOpen(dir.opposite())) {
                     return true;
                 }
             }
         }
-        if (l > 0 && grid[l - 1][x][z].size() == 1 && grid[l - 1][x][z].get(0).isVerticalBottom()) {
+        if (l > 0 && grid[l - 1][x][z].size() == 1 && grid[l - 1][x][z].getFirst().isVerticalBottom()) {
             return true;
         }
         return false;
@@ -594,7 +577,7 @@ public class WaveFunctionCollapse {
         int count = 0;
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < height; z++) {
-                if (grid[floor][x][z].size() == 1 && grid[floor][x][z].get(0).isVerticalBottom()) {
+                if (grid[floor][x][z].size() == 1 && grid[floor][x][z].getFirst().isVerticalBottom()) {
                     if (++count >= 2) return count;
                 }
             }
@@ -602,19 +585,48 @@ public class WaveFunctionCollapse {
         return count;
     }
 
+    /**
+     * Distance to the nearest already-placed segment sharing this segment's id.
+     * Matches by id rather than object identity so that variant files loaded
+     * under the same config id (e.g. several "deadend" schematics) are treated
+     * as one type for spacing purposes.
+     */
     private int countSinceLastSegment(List<WfcTile>[][][] grid, CellPos3D cell, MineshaftSegment segment) {
+        String id = segment.getId();
         int minDistance = Integer.MAX_VALUE;
         for (int l = 0; l < layers; l++) {
             for (int x = 0; x < width; x++) {
                 for (int z = 0; z < height; z++) {
-                    if (grid[l][x][z].size() == 1 && grid[l][x][z].get(0).segment() == segment) {
-                        int dist = Math.abs(x - cell.x()) + Math.abs(z - cell.z()) + Math.abs(l - cell.l());
-                        minDistance = Math.min(minDistance, dist);
+                    if (grid[l][x][z].size() == 1) {
+                        MineshaftSegment other = grid[l][x][z].getFirst().segment();
+                        if (other != null && other.getId().equals(id)) {
+                            int dist = Math.abs(x - cell.x()) + Math.abs(z - cell.z()) + Math.abs(l - cell.l());
+                            minDistance = Math.min(minDistance, dist);
+                        }
                     }
                 }
             }
         }
-        return minDistance == Integer.MAX_VALUE ? Integer.MAX_VALUE : minDistance;
+        return minDistance;
+    }
+
+    /** Same idea as countSinceLastSegment, but for multi_tile cluster placements. */
+    private int countSinceLastCluster(List<WfcTile>[][][] grid, CellPos3D cell, String clusterId) {
+        int minDistance = Integer.MAX_VALUE;
+        for (int l = 0; l < layers; l++) {
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < height; z++) {
+                    if (grid[l][x][z].size() == 1) {
+                        WfcTile t = grid[l][x][z].getFirst();
+                        if (t.isFootprintAnchor() && t.cluster() != null && t.cluster().getId().equals(clusterId)) {
+                            int dist = Math.abs(x - cell.x()) + Math.abs(z - cell.z()) + Math.abs(l - cell.l());
+                            minDistance = Math.min(minDistance, dist);
+                        }
+                    }
+                }
+            }
+        }
+        return minDistance;
     }
 
     private int deadEndRepulsionRadius() {
@@ -636,12 +648,32 @@ public class WaveFunctionCollapse {
             for (int z = minZ; z <= maxZ; z++) {
                 if (x == cx && z == cz) continue;
                 List<WfcTile> domain = grid[l][x][z];
-                if (domain.size() == 1 && isDeadEndTile(domain.get(0))) {
+                if (domain.size() == 1 && isDeadEndTile(domain.getFirst())) {
                     if (Math.abs(x - cx) + Math.abs(z - cz) <= radius) return true;
                 }
             }
         }
         return false;
+    }
+
+    /** True unless idA blacklists idB (or vice versa) - checked both ways so listing it on either side is enough. */
+    private boolean isConnectionAllowed(String idA, String idB) {
+        if (idA == null || idB == null) return true;
+        Set<String> blacklistA = connectionBlacklist.get(idA);
+        if (blacklistA != null && blacklistA.contains(idB)) return false;
+        Set<String> blacklistB = connectionBlacklist.get(idB);
+        if (blacklistB != null && blacklistB.contains(idA)) return false;
+        return true;
+    }
+
+    /**
+     * Blacklists only matter when the two tiles would actually share an open
+     * doorway in this direction - two blacklisted pieces are still allowed to
+     * sit side by side with a solid wall between them.
+     */
+    private boolean isConnectionAllowed(WfcTile a, WfcTile b, Direction dir) {
+        if (!(a.isOpen(dir) && b.isOpen(dir.opposite()))) return true;
+        return isConnectionAllowed(appearanceKey(a), appearanceKey(b));
     }
 
     private String appearanceKey(WfcTile tile) {
@@ -689,11 +721,11 @@ public class WaveFunctionCollapse {
 
             if (!emptyList.isEmpty() && !nonEmptyList.isEmpty()) {
                 if (random.nextDouble() < 0.5) {
-                    return emptyList.get(0);
+                    return emptyList.getFirst();
                 }
                 candidateDomain = nonEmptyList;
             } else if (!emptyList.isEmpty()) {
-                return emptyList.get(0);
+                return emptyList.getFirst();
             }
         }
 
@@ -705,69 +737,53 @@ public class WaveFunctionCollapse {
 
         double totalWeight = 0.0;
         for (WfcTile tile : candidateDomain) {
-            double w = Math.max(0.01, tile.weight());
-            if (!tile.isMultiTilePart()) {
-                if (tile.isVerticalBottom() && boostStairs) {
-                    w *= 4.0;
-                }
-                if (isStraightTile(tile) && consecutiveStraight > 0) {
-                    int maxCons = tile.segment() != null ? tile.segment().getMaxConsecutiveStraight() : -1;
-                    if (maxCons > 0 && consecutiveStraight >= maxCons) {
-                        w *= 0.05;
-                    }
-                }
-                if (isDeadEndTile(tile) && nearbyDeadEnd) {
-                    w *= 0.03;
-                }
-            }
-
-            if (tile.segment() != null) {
-                int spacing = tile.segment().getMinSpacing();
-                if (spacing > 0) {
-                    int dist = countSinceLastSegment(grid, cell, tile.segment());
-                    if (dist < spacing) w *= 0.01;
-                }
-            }
-
-            w *= underMinAppearancesBoost(tile, appearanceCounts);
-
-            totalWeight += w;
+            totalWeight += tileWeight(tile, cell, grid, appearanceCounts, boostStairs, consecutiveStraight, nearbyDeadEnd);
         }
         double r = random.nextDouble() * totalWeight;
         double count = 0.0;
         for (WfcTile tile : candidateDomain) {
-            double w = Math.max(0.01, tile.weight());
-            if (!tile.isMultiTilePart()) {
-                if (tile.isVerticalBottom() && boostStairs) {
-                    w *= 4.0;
-                }
-                if (isStraightTile(tile) && consecutiveStraight > 0) {
-                    int maxCons = tile.segment() != null ? tile.segment().getMaxConsecutiveStraight() : -1;
-                    if (maxCons > 0 && consecutiveStraight >= maxCons) {
-                        w *= 0.05;
-                    }
-                }
-                if (isDeadEndTile(tile) && nearbyDeadEnd) {
-                    w *= 0.03;
-                }
-            }
-
-            if (tile.segment() != null) {
-                int spacing = tile.segment().getMinSpacing();
-                if (spacing > 0) {
-                    int dist = countSinceLastSegment(grid, cell, tile.segment());
-                    if (dist < spacing) w *= 0.01;
-                }
-            }
-
-            w *= underMinAppearancesBoost(tile, appearanceCounts);
-
-            count += w;
+            count += tileWeight(tile, cell, grid, appearanceCounts, boostStairs, consecutiveStraight, nearbyDeadEnd);
             if (count >= r) {
                 return tile;
             }
         }
-        return candidateDomain.get(candidateDomain.size() - 1);
+        return candidateDomain.getLast();
+    }
+
+    private double tileWeight(WfcTile tile, CellPos3D cell, List<WfcTile>[][][] grid, Map<String, Integer> appearanceCounts,
+                              boolean boostStairs, int consecutiveStraight, boolean nearbyDeadEnd) {
+        double w = Math.max(0.01, tile.weight());
+        if (!tile.isMultiTilePart()) {
+            if (tile.isVerticalBottom() && boostStairs) {
+                w *= 4.0;
+            }
+            if (isStraightTile(tile) && consecutiveStraight > 0) {
+                int maxCons = tile.segment() != null ? tile.segment().getMaxConsecutiveStraight() : -1;
+                if (maxCons > 0 && consecutiveStraight >= maxCons) {
+                    w *= 0.05;
+                }
+            }
+            if (isDeadEndTile(tile) && nearbyDeadEnd) {
+                w *= 0.03;
+            }
+        }
+
+        if (tile.segment() != null) {
+            int spacing = tile.segment().getMinSpacing();
+            if (spacing > 0) {
+                int dist = countSinceLastSegment(grid, cell, tile.segment());
+                if (dist < spacing) w *= 0.01;
+            }
+        } else if (tile.isFootprintAnchor() && tile.cluster() != null) {
+            int spacing = tile.cluster().getMinSpacing();
+            if (spacing > 0) {
+                int dist = countSinceLastCluster(grid, cell, tile.cluster().getId());
+                if (dist < spacing) w *= 0.01;
+            }
+        }
+
+        w *= underMinAppearancesBoost(tile, appearanceCounts);
+        return w;
     }
 
     private static int getDirX(Direction dir) {
@@ -803,7 +819,7 @@ public class WaveFunctionCollapse {
             int nz = cell.z() + getDirZ(dir);
             int localCount = 0;
             while (nx >= 0 && nx < width && nz >= 0 && nz < height) {
-                if (grid[cell.l()][nx][nz].size() == 1 && isStraightTile(grid[cell.l()][nx][nz].get(0))) {
+                if (grid[cell.l()][nx][nz].size() == 1 && isStraightTile(grid[cell.l()][nx][nz].getFirst())) {
                     localCount++;
                     nx += getDirX(dir);
                     nz += getDirZ(dir);
@@ -816,13 +832,106 @@ public class WaveFunctionCollapse {
         return count;
     }
 
+    /** Prunes unreachable cells, then checks every requiresConnection rule against the pruned result. Returns null (attempt rejected) if a rule isn't met. */
+    private WfcTile[][][] finalizeIfValid(WfcTile[][][] result) {
+        pruneUnreachable(result);
+        if (!satisfiesConnectionRequirements(result)) {
+            return null;
+        }
+        return result;
+    }
+
+    /** Checks every placed segment/cluster that has a requiresConnection rule against the final grid. */
+    private boolean satisfiesConnectionRequirements(WfcTile[][][] grid) {
+        if (connectionRequirements.isEmpty()) return true;
+        for (int l = 0; l < layers; l++) {
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < height; z++) {
+                    WfcTile tile = grid[l][x][z];
+                    if (tile == null || tile.isEmpty()) continue;
+                    if (tile.isMultiTilePart() && !tile.isFootprintAnchor()) continue; // only check the anchor once
+                    String key = appearanceKey(tile);
+                    if (key == null) continue;
+                    ConnectionRequirement req = connectionRequirements.get(key);
+                    if (req == null) continue;
+                    if (!hasRequiredNeighbor(grid, l, x, z, req)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * BFS out from (startL, startX, startZ) through actual open doorways (horizontal
+     * neighbors sharing a socket, plus stairwell bottom/top hops) looking for any tile
+     * whose id is in req.allowedIds(). maxDistance <= 0 means keep searching the whole
+     * reachable network ("indirect" is fine); a positive maxDistance stops after that
+     * many hops (1 means it must be a direct neighbor).
+     */
+    private boolean hasRequiredNeighbor(WfcTile[][][] grid, int startL, int startX, int startZ, ConnectionRequirement req) {
+        Deque<int[]> frontier = new ArrayDeque<>();
+        Set<Long> visited = new HashSet<>();
+        frontier.add(new int[]{startL, startX, startZ, 0});
+        visited.add(cellKey(startL, startX, startZ));
+
+        while (!frontier.isEmpty()) {
+            int[] cur = frontier.poll();
+            int l = cur[0], x = cur[1], z = cur[2], dist = cur[3];
+            WfcTile curTile = grid[l][x][z];
+            if (curTile == null || curTile.isEmpty()) continue;
+
+            if (dist > 0) {
+                String curKey = appearanceKey(curTile);
+                if (curKey != null && req.allowedIds().contains(curKey)) {
+                    return true;
+                }
+            }
+
+            if (req.maxDistance() > 0 && dist >= req.maxDistance()) continue;
+
+            for (Direction dir : Direction.values()) {
+                int nx = x + getDirX(dir), nz = z + getDirZ(dir);
+                if (nx < 0 || nx >= width || nz < 0 || nz >= height) continue;
+                WfcTile neighborTile = grid[l][nx][nz];
+                if (neighborTile == null || neighborTile.isEmpty()) continue;
+                if (!(curTile.isOpen(dir) && neighborTile.isOpen(dir.opposite()))) continue;
+                long key = cellKey(l, nx, nz);
+                if (visited.add(key)) {
+                    frontier.add(new int[]{l, nx, nz, dist + 1});
+                }
+            }
+
+            if (l + 1 < layers) {
+                WfcTile above = grid[l + 1][x][z];
+                if (above != null && !above.isEmpty() && WfcTile.isVerticalCompatible(curTile, above)) {
+                    long key = cellKey(l + 1, x, z);
+                    if (visited.add(key)) frontier.add(new int[]{l + 1, x, z, dist + 1});
+                }
+            }
+            if (l - 1 >= 0) {
+                WfcTile below = grid[l - 1][x][z];
+                if (below != null && !below.isEmpty() && WfcTile.isVerticalCompatible(below, curTile)) {
+                    long key = cellKey(l - 1, x, z);
+                    if (visited.add(key)) frontier.add(new int[]{l - 1, x, z, dist + 1});
+                }
+            }
+        }
+        return false;
+    }
+
+    private static long cellKey(int l, int x, int z) {
+        return ((long) l << 40) ^ ((long) x << 20) ^ (long) z;
+    }
+
     /**
      * Flood fills outward from the true grid center (where the centre/center
      * cluster is now guaranteed to sit) using the same open socket rules the
      * WFC solver itself uses, then nukes anything the flood never touched.
-     * Multi tile clusters are treated as one indivisible blob: if any single
+     * Multi-tile clusters are treated as one indivisible blob: if any single
      * cell of a cluster gets reached, the whole footprint survives, and if
-     * none of it gets reached, the whole footprint gets vaporized.
+     * none of them gets reached, the whole footprint gets vaporized.
      */
     private void pruneUnreachable(WfcTile[][][] grid) {
         int startX = width / 2;
@@ -833,9 +942,78 @@ public class WaveFunctionCollapse {
 
         boolean[][][] visited = new boolean[layers][width][height];
         Deque<CellPos3D> queue = new ArrayDeque<>();
-
         markReachable(grid, visited, queue, startL, startX, startZ);
+        expandReachability(grid, visited, queue);
 
+        // Group the about-to-be-pruned placements by their appearance id, but only
+        // for ids that actually have a minAppearances floor configured. Everything
+        // else follows the old behaviour further down.
+        Map<String, List<CellPos3D>> unreachableByKey = new HashMap<>();
+        for (int l = 0; l < layers; l++) {
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < height; z++) {
+                    WfcTile tile = grid[l][x][z];
+                    if (tile == null || tile.isEmpty() || visited[l][x][z]) continue;
+                    if (tile.isMultiTilePart() && !tile.isFootprintAnchor()) continue; // handled via its anchor
+                    String key = appearanceKey(tile);
+                    if (key == null) continue;
+                    int[] limits = appearanceLimits.get(key);
+                    if (limits == null || limits[0] <= 0) continue;
+                    unreachableByKey.computeIfAbsent(key, k -> new ArrayList<>()).add(new CellPos3D(l, x, z));
+                }
+            }
+        }
+
+        // Decide which of those unreachable placements MUST survive to keep each
+        // id at or above its configured minimum.
+        Set<CellPos3D> protectedAnchors = new HashSet<>();
+        for (Map.Entry<String, List<CellPos3D>> entry : unreachableByKey.entrySet()) {
+            int min = appearanceLimits.get(entry.getKey())[0];
+            int reachableCount = countReachableAppearances(grid, visited, entry.getKey());
+            int deficit = min - reachableCount;
+            for (int i = 0; i < entry.getValue().size() && i < deficit; i++) {
+                protectedAnchors.add(entry.getValue().get(i));
+            }
+        }
+
+        // Instead of just leaving protected placements floating in the void, try
+        // to carve a corridor of ordinary connector tiles back to the reachable
+        // network so they actually become part of the map.
+        for (CellPos3D anchor : protectedAnchors) {
+            if (visited[anchor.l()][anchor.x()][anchor.z()]) continue;
+            if (attemptLocalReconnect(grid, visited, protectedAnchors, anchor)) {
+                Deque<CellPos3D> q = new ArrayDeque<>();
+                markReachable(grid, visited, q, anchor.l(), anchor.x(), anchor.z());
+                expandReachability(grid, visited, q);
+            } else {
+                System.out.println("[WFC] " + appearanceKey(grid[anchor.l()][anchor.x()][anchor.z()])
+                        + " at " + anchor + " is below its minAppearances floor - keeping it un-pruned even though"
+                        + " it couldn't be reconnected");
+            }
+        }
+
+        WfcTile emptyTile = prototypes.stream().filter(WfcTile::isEmpty).findFirst()
+                .orElse(WfcTile.createEmptyTile(2.0));
+
+        int removed = 0;
+        for (int l = 0; l < layers; l++) {
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < height; z++) {
+                    WfcTile tile = grid[l][x][z];
+                    if (tile == null || tile.isEmpty() || visited[l][x][z]) continue;
+                    if (isPartOfProtectedFootprint(grid, protectedAnchors, l, x, z)) continue;
+                    grid[l][x][z] = emptyTile;
+                    removed++;
+                }
+            }
+        }
+        if (removed > 0) {
+            System.out.println("[WFC] pruned " + removed + " unreachable cell(s), they were living a lie");
+        }
+    }
+
+    /** Pulled out of pruneUnreachable so a reconnect pass can re-run it from a new seed cell. */
+    private void expandReachability(WfcTile[][][] grid, boolean[][][] visited, Deque<CellPos3D> queue) {
         while (!queue.isEmpty()) {
             CellPos3D cur = queue.poll();
             WfcTile curTile = grid[cur.l()][cur.x()][cur.z()];
@@ -868,25 +1046,195 @@ public class WaveFunctionCollapse {
                 }
             }
         }
+    }
 
-        WfcTile emptyTile = prototypes.stream().filter(WfcTile::isEmpty).findFirst()
-                .orElse(WfcTile.createEmptyTile(2.0));
-
-        int removed = 0;
+    /** Counts already-reachable placed instances of a given segment/cluster id (one count per anchor, not per footprint cell). */
+    private int countReachableAppearances(WfcTile[][][] grid, boolean[][][] visited, String key) {
+        int count = 0;
         for (int l = 0; l < layers; l++) {
             for (int x = 0; x < width; x++) {
                 for (int z = 0; z < height; z++) {
                     WfcTile tile = grid[l][x][z];
-                    if (tile != null && !tile.isEmpty() && !visited[l][x][z]) {
-                        grid[l][x][z] = emptyTile;
-                        removed++;
-                    }
+                    if (tile == null || tile.isEmpty() || !visited[l][x][z]) continue;
+                    if (tile.isMultiTilePart() && !tile.isFootprintAnchor()) continue;
+                    if (key.equals(appearanceKey(tile))) count++;
                 }
             }
         }
-        if (removed > 0) {
-            System.out.println("[WFC] pruned " + removed + " unreachable cell(s), they were living a lie");
+        return count;
+    }
+
+    /** True if (l,x,z) belongs to the footprint of one of the given protected anchors (anchor cell itself, or one of its filler cells). */
+    private boolean isPartOfProtectedFootprint(WfcTile[][][] grid, Set<CellPos3D> protectedAnchors, int l, int x, int z) {
+        WfcTile tile = grid[l][x][z];
+        if (tile == null) return false;
+        if (tile.isMultiTilePart()) {
+            int anchorX = x - tile.footprintOffsetX();
+            int anchorZ = z - tile.footprintOffsetZ();
+            int anchorL = l - tile.footprintOffsetLayer();
+            return protectedAnchors.contains(new CellPos3D(anchorL, anchorX, anchorZ));
         }
+        return protectedAnchors.contains(new CellPos3D(l, x, z));
+    }
+
+    private List<CellPos3D> collectFootprint(CellPos3D anchor, WfcTile anchorTile) {
+        List<CellPos3D> footprint = new ArrayList<>();
+        if (anchorTile.isMultiTilePart() && anchorTile.cluster() != null) {
+            Cluster cluster = anchorTile.cluster();
+            Rotation rot = anchorTile.rotation();
+            int fw = cluster.getFootprintWidth(rot);
+            int fh = cluster.getFootprintHeight(rot);
+            for (int i = 0; i < fw; i++) {
+                for (int j = 0; j < fh; j++) {
+                    int gx = anchor.x() + i, gz = anchor.z() + j;
+                    if (gx >= 0 && gx < width && gz >= 0 && gz < height) {
+                        footprint.add(new CellPos3D(anchor.l(), gx, gz));
+                    }
+                }
+            }
+        } else {
+            footprint.add(anchor);
+        }
+        return footprint;
+    }
+
+    /**
+     * Tries to build a corridor of ordinary connector tiles from a protected,
+     * currently-unreachable placement back to the already-reachable network,
+     * on the same floor. Only walks out of the placement through sockets it
+     * already has open (we can't retroactively cut a new doorway into an
+     * already-placed schematic), and only walks into the reachable network
+     * through a socket that already faces back. Everything in between is
+     * free real estate: it gets overwritten with freshly chosen connector
+     * tiles. Returns false (grid untouched) if no such corridor exists within
+     * MAX_RECONNECT_DISTANCE.
+     */
+    private boolean attemptLocalReconnect(WfcTile[][][] grid, boolean[][][] visited, Set<CellPos3D> protectedAnchors, CellPos3D anchor) {
+        WfcTile anchorTile = grid[anchor.l()][anchor.x()][anchor.z()];
+        if (anchorTile == null || anchorTile.isEmpty()) return false;
+
+        List<CellPos3D> footprint = collectFootprint(anchor, anchorTile);
+        Set<CellPos3D> footprintSet = new HashSet<>(footprint);
+
+        Map<CellPos3D, CellPos3D> cameFrom = new HashMap<>();
+        Map<CellPos3D, Direction> arriveDir = new HashMap<>();
+        Deque<CellPos3D> frontier = new ArrayDeque<>();
+        Set<CellPos3D> seen = new HashSet<>(footprintSet);
+
+        for (CellPos3D f : footprint) {
+            WfcTile fTile = grid[f.l()][f.x()][f.z()];
+            for (Direction dir : Direction.values()) {
+                if (!fTile.isOpen(dir)) continue; // can only leave through a socket it already has
+                int nx = f.x() + getDirX(dir), nz = f.z() + getDirZ(dir);
+                if (nx < 0 || nx >= width || nz < 0 || nz >= height) continue;
+                CellPos3D n = new CellPos3D(f.l(), nx, nz);
+                if (seen.contains(n)) continue;
+                seen.add(n);
+                cameFrom.put(n, f);
+                arriveDir.put(n, dir);
+                frontier.add(n);
+            }
+        }
+
+        CellPos3D destination = null;
+        int expanded = 0;
+        int budget = width * height + 10;
+        while (!frontier.isEmpty() && expanded < budget) {
+            CellPos3D cur = frontier.poll();
+            expanded++;
+
+            if (visited[cur.l()][cur.x()][cur.z()]) {
+                Direction incoming = arriveDir.get(cur);
+                WfcTile curTile = grid[cur.l()][cur.x()][cur.z()];
+                if (curTile != null && curTile.isOpen(incoming.opposite())) {
+                    destination = cur;
+                    break;
+                }
+                continue; // real, connected tile, but no doorway facing us - can't use it
+            }
+            if (isPartOfProtectedFootprint(grid, protectedAnchors, cur.l(), cur.x(), cur.z())) {
+                continue; // don't tunnel through someone else's protected placement
+            }
+
+            for (Direction dir : Direction.values()) {
+                int nx = cur.x() + getDirX(dir), nz = cur.z() + getDirZ(dir);
+                if (nx < 0 || nx >= width || nz < 0 || nz >= height) continue;
+                CellPos3D n = new CellPos3D(cur.l(), nx, nz);
+                if (seen.contains(n)) continue;
+                seen.add(n);
+                cameFrom.put(n, cur);
+                arriveDir.put(n, dir);
+                frontier.add(n);
+            }
+        }
+
+        if (destination == null) return false;
+
+        List<CellPos3D> corridor = new ArrayList<>();
+        CellPos3D cur = cameFrom.get(destination);
+        while (cur != null && !footprintSet.contains(cur)) {
+            corridor.add(0, cur);
+            cur = cameFrom.get(cur);
+        }
+
+        return placeCorridor(grid, corridor, arriveDir, destination, appearanceKey(anchorTile));
+    }
+
+    private boolean placeCorridor(WfcTile[][][] grid, List<CellPos3D> corridor, Map<CellPos3D, Direction> arriveDir,
+                                  CellPos3D destination, String anchorKey) {
+        WfcTile destinationTile = grid[destination.l()][destination.x()][destination.z()];
+
+        if (corridor.isEmpty()) {
+            // The placement already opens directly onto the reachable tile - still has to clear the blacklist.
+            return isConnectionAllowed(anchorKey, appearanceKey(destinationTile));
+        }
+
+        List<WfcTile> chosen = new ArrayList<>(corridor.size());
+        for (int i = 0; i < corridor.size(); i++) {
+            CellPos3D cell = corridor.get(i);
+            Direction incoming = arriveDir.get(cell).opposite();
+            Direction outgoing = (i + 1 < corridor.size()) ? arriveDir.get(corridor.get(i + 1)) : arriveDir.get(destination);
+            if (incoming == outgoing) return false; // pathological doubling-back, bail rather than build garbage
+
+            WfcTile candidate = findConnectorTile(cell.x(), cell.z(), incoming, outgoing);
+            if (candidate == null) return false;
+            chosen.add(candidate);
+        }
+
+        if (!isConnectionAllowed(anchorKey, appearanceKey(chosen.get(0)))) return false;
+        if (!isConnectionAllowed(appearanceKey(chosen.get(chosen.size() - 1)), appearanceKey(destinationTile))) return false;
+        for (int i = 0; i + 1 < chosen.size(); i++) {
+            if (!isConnectionAllowed(appearanceKey(chosen.get(i)), appearanceKey(chosen.get(i + 1)))) return false;
+        }
+
+        for (int i = 0; i < corridor.size(); i++) {
+            CellPos3D cell = corridor.get(i);
+            grid[cell.l()][cell.x()][cell.z()] = chosen.get(i);
+        }
+        return true;
+    }
+
+    /** Finds a non-empty, non-multi-tile, non-vertical prototype with both required sockets open, preferring the fewest extra open sockets. */
+    private WfcTile findConnectorTile(int x, int z, Direction required1, Direction required2) {
+        WfcTile best = null;
+        int bestExtraSockets = Integer.MAX_VALUE;
+        for (WfcTile tile : prototypes) {
+            if (tile.isEmpty() || tile.isMultiTilePart() || tile.isVerticalBottom() || tile.isVerticalTop()) continue;
+            Set<Direction> sockets = tile.openSockets();
+            if (!sockets.contains(required1) || !sockets.contains(required2)) continue;
+            if (x == 0 && sockets.contains(Direction.WEST)) continue;
+            if (x == width - 1 && sockets.contains(Direction.EAST)) continue;
+            if (z == 0 && sockets.contains(Direction.NORTH)) continue;
+            if (z == height - 1 && sockets.contains(Direction.SOUTH)) continue;
+
+            int extra = sockets.size() - 2;
+            if (extra < bestExtraSockets) {
+                bestExtraSockets = extra;
+                best = tile;
+                if (extra == 0) break;
+            }
+        }
+        return best;
     }
 
     private void markReachable(WfcTile[][][] grid, boolean[][][] visited, Deque<CellPos3D> queue, int l, int x, int z) {

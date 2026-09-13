@@ -1,6 +1,7 @@
 package ca.maximilian.extraction_game.worldgen;
 
-import ca.maximilian.extraction_game.core.handler.block.BlockHandlers;
+import ca.maximilian.extraction_game.core.RunningGame;
+import ca.maximilian.extraction_game.core.handler.BlockHandlers;
 import net.hollowcube.schem.util.Rotation;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
@@ -21,19 +22,6 @@ public class MineshaftGenerator {
     private static final ExecutorService GENERATION_WORKERS = Executors.newFixedThreadPool(
             Math.clamp(Runtime.getRuntime().availableProcessors() - 1, 1, 4),
             Thread.ofPlatform().daemon().name("mineshaft-worker-", 0).factory());
-
-    public static void generate(Instance instance) {
-        generateAsync(instance).join();
-    }
-
-    public static void generate(Instance instance, Pos startPos) {
-        generateAsync(instance, startPos, DEFAULT_CONFIG_PATH, DEFAULT_SIZE_BLOCKS,
-                DEFAULT_FLOORS, new Random()).join();
-    }
-
-    public static void generate(Instance instance, Pos startPos, int maxSegments) {
-        generate(instance, startPos, DEFAULT_CONFIG_PATH, maxSegments);
-    }
 
     public static void generate(Instance instance, Pos startPos, String configPath, int maxSegments) {
         generate(instance, startPos, configPath, maxSegments, new Random());

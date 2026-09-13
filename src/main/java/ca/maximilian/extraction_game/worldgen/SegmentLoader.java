@@ -10,7 +10,9 @@ import net.minestom.server.instance.block.Block;
 
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class SegmentLoader {
 
@@ -77,6 +79,34 @@ public class SegmentLoader {
                     int minAppearances = obj.has("minAppearances") ? obj.get("minAppearances").getAsInt() : -1;
                     int maxAppearances = obj.has("maxAppearances") ? obj.get("maxAppearances").getAsInt() : -1;
 
+                    // Optional list of other segment/cluster ids this one may never have a doorway directly into.
+                    Set<String> connectBlacklist = new HashSet<>();
+                    if (obj.has("blacklist")) {
+                        for (var bElem : obj.getAsJsonArray("blacklist")) {
+                            connectBlacklist.add(bElem.getAsString());
+                        }
+                    }
+
+                    // Optional: ids this segment must connect to, directly or indirectly through
+                    // the corridor network, for a generated map to be accepted. E.g. a stairwell
+                    // requiring at least a tjunction or crossroads somewhere reachable from it:
+                    //   "requiresConnection": { "anyOf": ["tjunction", "crossroads"], "maxDistance": -1 }
+                    // maxDistance is optional and defaults to -1 (unlimited / indirect is fine);
+                    // set it to 1 to require a direct neighbor instead.
+                    Set<String> requiredConnectionIds = new HashSet<>();
+                    int requiredConnectionMaxDistance = -1;
+                    if (obj.has("requiresConnection")) {
+                        JsonObject rc = obj.getAsJsonObject("requiresConnection");
+                        if (rc.has("anyOf")) {
+                            for (var rElem : rc.getAsJsonArray("anyOf")) {
+                                requiredConnectionIds.add(rElem.getAsString());
+                            }
+                        }
+                        if (rc.has("maxDistance")) {
+                            requiredConnectionMaxDistance = rc.get("maxDistance").getAsInt();
+                        }
+                    }
+
                     JsonElement fileElem = obj.get("file");
                     if (fileElem == null) continue;
 
@@ -84,7 +114,8 @@ public class SegmentLoader {
                         String file = fileElem.getAsString();
                         loadAndAddSegment(segments, id, file, markerBlock, isStarting, weight, maxConsecutiveStraight,
                                 minSpacing, multiTileWidth, multiTileHeight, multiTileLayers, basePath,
-                                minAppearances, maxAppearances);
+                                minAppearances, maxAppearances, connectBlacklist,
+                                requiredConnectionIds, requiredConnectionMaxDistance);
                     } else if (fileElem.isJsonArray()) {
                         JsonArray files = fileElem.getAsJsonArray();
                         for (var fElem : files) {
@@ -93,7 +124,8 @@ public class SegmentLoader {
                             double fWeight = fObj.has("weight") ? fObj.get("weight").getAsDouble() : weight;
                             loadAndAddSegment(segments, id, file, markerBlock, isStarting, fWeight, maxConsecutiveStraight,
                                     minSpacing, multiTileWidth, multiTileHeight, multiTileLayers, basePath,
-                                    minAppearances, maxAppearances);
+                                    minAppearances, maxAppearances, connectBlacklist,
+                                    requiredConnectionIds, requiredConnectionMaxDistance);
                         }
                     }
                 }
@@ -134,7 +166,8 @@ public class SegmentLoader {
     private static void loadAndAddSegment(List<MineshaftSegment> segments, String id, String file, Block markerBlock,
                                           boolean isStarting, double weight, int maxConsecutiveStraight, int minSpacing,
                                           int multiTileWidth, int multiTileHeight, int multiTileLayers, String basePath,
-                                          int minAppearances, int maxAppearances) {
+                                          int minAppearances, int maxAppearances, Set<String> connectBlacklist,
+                                          Set<String> requiredConnectionIds, int requiredConnectionMaxDistance) {
         var schemStream = SegmentLoader.class.getResourceAsStream(basePath + file);
         if (schemStream == null) {
             schemStream = SegmentLoader.class.getResourceAsStream("/mineshaft/" + file);
@@ -152,9 +185,12 @@ public class SegmentLoader {
         try {
             byte[] bytes = schemStream.readAllBytes();
             Schematic schematic = SchematicReader.detecting().read(bytes);
-            segments.add(new MineshaftSegment(id, schematic, markerBlock, isStarting, weight,
+            MineshaftSegment segment = new MineshaftSegment(id, schematic, markerBlock, isStarting, weight,
                     maxConsecutiveStraight, minSpacing, multiTileWidth, multiTileHeight, multiTileLayers,
-                    minAppearances, maxAppearances));
+                    minAppearances, maxAppearances);
+            segment.setConnectBlacklist(connectBlacklist);
+            segment.setRequiredConnections(requiredConnectionIds, requiredConnectionMaxDistance);
+            segments.add(segment);
         } catch (Exception e) {
             System.err.println("Failed to load schematic " + file + ": " + e.getMessage());
         }

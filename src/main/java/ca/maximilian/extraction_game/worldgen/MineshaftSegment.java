@@ -1,5 +1,6 @@
 package ca.maximilian.extraction_game.worldgen;
 
+import lombok.Getter;
 import net.hollowcube.schem.Schematic;
 import net.hollowcube.schem.builder.SchematicBuilder;
 import net.hollowcube.schem.util.CoordinateUtil;
@@ -10,6 +11,7 @@ import net.minestom.server.instance.block.Block;
 import java.util.HashSet;
 import java.util.Set;
 
+@Getter
 public class MineshaftSegment {
     private final String id;
     private final Schematic schematic;
@@ -27,6 +29,28 @@ public class MineshaftSegment {
     private final int multiTileLayers;
     private final int minAppearances;
     private final int maxAppearances;
+    /** Ids of other segments/clusters this one is not allowed to have a doorway directly into. Mutable so SegmentLoader can attach it after construction without touching every overload below. */
+    private Set<String> connectBlacklist = new HashSet<>();
+
+    public void setConnectBlacklist(Set<String> blacklist) {
+        this.connectBlacklist = blacklist != null ? blacklist : new HashSet<>();
+    }
+
+    /**
+     * Ids this segment must connect to (directly or indirectly through the corridor
+     * network) for a generated map to be considered valid. Empty means no requirement.
+     * Same mutable-after-construction pattern as connectBlacklist above.
+     */
+    private Set<String> requiredConnections = new HashSet<>();
+    /** -1 or 0 means "anywhere in the reachable network" (indirect is fine). A positive number caps how many rooms away the match may be, so 1 means it must be a direct neighbor. */
+    private int requiredConnectionMaxDistance = -1;
+
+    public void setRequiredConnections(Set<String> requiredConnections, int maxDistance) {
+        this.requiredConnections = requiredConnections != null ? requiredConnections : new HashSet<>();
+        this.requiredConnectionMaxDistance = maxDistance;
+    }
+
+    public boolean hasRequiredConnections() { return !requiredConnections.isEmpty(); }
 
     public MineshaftSegment(String id, Schematic schematic, Block markerBlock) {
         this(id, schematic, markerBlock, false, -1, -1, 0, 1, 1, 1, -1, -1);
@@ -127,7 +151,7 @@ public class MineshaftSegment {
         int needed = 2;
         int consecutive = 0;
         for (int y = 1; y < height - 1; y++) {
-            Point p = isZFixed ? new Vec(faceX, y, faceZ) : new Vec(faceX, y, faceZ);
+            Point p = new Vec(faceX, y, faceZ);
             if (!solidBlocks.contains(p)) {
                 consecutive++;
                 if (consecutive >= needed) return true;
@@ -281,24 +305,10 @@ public class MineshaftSegment {
         return 5;
     }
 
-    public String getId() { return id; }
-    public Schematic getSchematic() { return schematic; }
-    public Set<Connector> getConnectors() { return connectors; }
-    public int getWidth() { return width; }
-    public int getHeight() { return height; }
-    public int getLength() { return length; }
-    public boolean isStarting() { return starting; }
     public boolean isStartingSegment() { return starting; }
-    public double getWeight() { return weight; }
-    public Block getMarkerBlock() { return markerBlock; }
-    public int getMinSpacing() { return minSpacing; }
-    public int getMultiTileLayers() { return multiTileLayers; }
-    public int getMaxConsecutiveStraight() { return maxConsecutiveStraight; }
-    public int getMultiTileWidth() { return multiTileWidth; }
-    public int getMultiTileHeight() { return multiTileHeight; }
+
     public boolean isMultiTile() { return multiTileWidth > 1 || multiTileHeight > 1 || multiTileLayers > 1; }
-    public int getMinAppearances() { return minAppearances; }
-    public int getMaxAppearances() { return maxAppearances; }
+
     public boolean hasMinAppearances() { return minAppearances > 0; }
     public boolean hasMaxAppearances() { return maxAppearances > 0; }
 }
