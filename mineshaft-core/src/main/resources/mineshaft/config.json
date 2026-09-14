@@ -1,0 +1,134 @@
+{
+  "segments": [
+    {
+      "id": "centre",
+      "file": "centre.nbt",
+      "weight": 5.0,
+      "multi_tile": { "width": 3, "height": 3 },
+      "requiresConnection": {
+        "anyOf": ["tjunction", "crossroads", "coal_room", "room", "management"],
+        "maxDistance": -1
+      }
+    },
+    {
+      "id": "straight",
+      "file": [
+        {
+          "file": "straight/straight.nbt",
+          "weight": 100.0
+        },
+        {
+          "file": "straight/straight_caved_in.nbt",
+          "weight": 25.0
+        },
+        {
+          "file": "straight/straight_collapsed.nbt",
+          "weight": 50.0
+        },
+        {
+          "file": "straight/straight_maze.nbt",
+          "weight": 10.0
+        },
+        {
+          "file": "straight/straight_variant_2.nbt",
+          "weight": 90.0
+        },
+        {
+          "file": "straight/straight_weathered.nbt",
+          "weight": 15.0
+        }
+      ],
+      "weight": 5.0,
+      "maxConsecutiveStraight": 3,
+      "minSpacing": 0
+    },
+    {
+      "id": "corner",
+      "file": "corner.nbt",
+      "weight": 4.0,
+      "maxConsecutiveStraight": 1,
+      "minSpacing": 2
+    },
+    {
+      "id": "crossroads",
+      "file": "crossroads.nbt",
+      "weight": 3.5,
+      "maxConsecutiveStraight": 2,
+      "minSpacing": 4
+    },
+    {
+      "id": "deadend",
+      "file": [
+        {
+          "file": "deadend.nbt",
+          "weight": 25.0
+        },
+        {
+          "file": "deadend_2.nbt",
+          "weight": 100.0
+        },
+        {
+          "file": "deadend_loot.nbt",
+          "weight": 1.0
+        }
+      ],
+      "weight": 2.0,
+      "minSpacing": 2,
+      "blacklist": [
+        "centre"
+      ]
+    },
+    {
+      "id": "tjunction",
+      "file": "tjunction.nbt",
+      "weight": 3.5,
+      "maxConsecutiveStraight": 6,
+      "minSpacing": 2
+    },
+    {
+      "id": "stairwell",
+      "file": "stairwell.nbt",
+      "weight": 4.5,
+      "maxConsecutiveStraight": 1,
+      "minSpacing": 6,
+      "blacklist": [
+        "deadend"
+      ],
+      "requiresConnection": {
+        "anyOf": ["tjunction", "crossroads", "coal_room", "room"],
+        "maxDistance": -1
+      }
+    },
+    {
+      "id": "coal_room",
+      "file": "coal_room.nbt",
+      "weight": 3.0,
+      "maxConsecutiveStraight": 1,
+      "multi_tile": { "width": 3, "height": 3 },
+      "minSpacing": 5,
+      "minAppearances": 1,
+      "maxAppearances": 3,
+      "blacklist": ["room", "management"]
+    },
+    {
+      "id": "room",
+      "file": "room.nbt",
+      "weight": 5.0,
+      "maxConsecutiveStraight": 1,
+      "multi_tile": { "width": 3, "height": 3 },
+      "minSpacing": 5,
+      "minAppearances": 1,
+      "maxAppearances": 3
+    },
+    {
+      "id": "management",
+      "file": "management.nbt",
+      "weight": 2.0,
+      "maxConsecutiveStraight": 1,
+      "multi_tile": { "width": 3, "height": 3, "layers": 2 },
+      "minSpacing": 5,
+      "minAppearances": 1,
+      "maxAppearances": 1
+    }
+  ]
+}

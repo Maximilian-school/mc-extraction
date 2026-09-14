@@ -1,0 +1,3 @@
+[submodule "stomui"]
+	path = stomui
+	url = https://github.com/maximilian1121/stomui
